@@ -1,0 +1,278 @@
+{
+  // ==========================================================================
+  // OpenClaw Marketing Agent System — Configuration
+  // ==========================================================================
+  // This file is placed in ~/.openclaw-marketing/config.json5
+  // Adjust paths, keys, and settings to match your environment.
+  // ==========================================================================
+
+  // --- Gateway Security ---
+  gateway: {
+    bind: "loopback",                    // NEVER "lan" or "0.0.0.0" unless behind Tailscale
+    port: 18789,
+    trustedProxies: [],
+  },
+
+  // --- Logging & Diagnostics ---
+  logging: {
+    level: "info",
+    redactSensitive: true,               // Prevent API key leaks in logs
+  },
+  diagnostics: {
+    enabled: true,
+    flags: ["gateway.*", "session.*", "webhook.*", "agent.*"],
+  },
+
+  // --- Memory ---
+  memory: {
+    backend: "builtin",
+    citations: "auto",
+    qmd: {
+      paths: [
+        { path: "workspaces/marketing/memory/", name: "Marketing Knowledge" },
+        { path: "workspaces/marketing/strategies/", name: "Campaign Strategies" },
+        { path: "workspaces/marketing/performance/", name: "Performance Data" },
+        { path: "workspaces/analytics/memory/", name: "Market Research" },
+      ],
+      sessions: {
+        enabled: true,
+        retentionDays: 180,
+      },
+      update: {
+        interval: "5m",
+        embedInterval: "30m",
+      },
+      limits: {
+        maxResults: 10,
+        maxSnippetChars: 500,
+      },
+    },
+  },
+
+  // --- Agents ---
+  agents: {
+    defaults: {
+      model: {
+        primary: "claude-sonnet-4-5-20250929",
+        fallbacks: ["claude-opus-4-6"],
+      },
+    },
+
+    list: [
+      // --- Marketing Orchestrator ---
+      {
+        id: "marketing-orchestrator",
+        default: true,
+        name: "Marketing Orchestrator",
+        workspace: "./workspaces/marketing",
+        model: {
+          primary: "claude-sonnet-4-5-20250929",
+          fallbacks: ["claude-opus-4-6"],
+        },
+        skills: [
+          "clawhub",
+          "skill-from-masters",
+          "search-skill",
+          "skill-from-notebook",
+          "campaign-brief",
+          "content-ab-test",
+        ],
+        subagents: {
+          allowAgents: ["content-writer", "analyst"],
+          model: "claude-sonnet-4-5-20250929",
+        },
+        tools: {
+          policy: "allowlist",
+          allowlist: [
+            "memory_search",
+            "memory_get",
+            "sessions_spawn",
+            "clawhub",
+            "group:web",
+          ],
+        },
+        memorySearch: { enabled: true },
+        groupChat: {
+          requireMention: true,
+          toolPolicy: "mention",
+        },
+      },
+
+      // --- Content Writer ---
+      {
+        id: "content-writer",
+        name: "Content Writer",
+        workspace: "./workspaces/content",
+        model: "claude-sonnet-4-5-20250929",
+        skills: ["content-calendar", "seo-analyzer"],
+        tools: {
+          policy: "allowlist",
+          allowlist: [
+            "memory_search",
+            "memory_get",
+            "group:web",
+          ],
+        },
+        memorySearch: { enabled: true },
+      },
+
+      // --- Analyst ---
+      {
+        id: "analyst",
+        name: "Marketing Analyst",
+        workspace: "./workspaces/analytics",
+        model: {
+          primary: "claude-opus-4-6",
+          fallbacks: ["claude-sonnet-4-5-20250929"],
+        },
+        skills: ["campaign-analytics"],
+        tools: {
+          policy: "allowlist",
+          allowlist: [
+            "memory_search",
+            "memory_get",
+            "browser_screenshot",
+            "browser_navigate",
+            "browser_snapshot",
+            "group:web",
+          ],
+        },
+        memorySearch: { enabled: true },
+        sandbox: {
+          mode: "all",
+          workspaceAccess: "ro",
+          docker: {
+            image: "openclaw-sandbox-browser:bookworm-slim",
+          },
+          browser: {
+            enabled: true,
+            headless: true,
+          },
+        },
+      },
+    ],
+  },
+
+  // --- Channel Bindings ---
+  bindings: [
+    // Slack -> Orchestrator
+    {
+      agentId: "marketing-orchestrator",
+      match: { channel: "slack", accountId: "*" },
+    },
+  ],
+
+  // --- Channels (uncomment when ready) ---
+  // channels: {
+  //   slack: {
+  //     accounts: [
+  //       {
+  //         label: "marketing-team",
+  //         botToken: "${SLACK_BOT_TOKEN}",
+  //         appToken: "${SLACK_APP_TOKEN}",
+  //         dmPolicy: "pairing",
+  //         groupPolicy: "mention-gating",
+  //       },
+  //     ],
+  //   },
+  // },
+
+  // --- Session Send Policy (default-deny external) ---
+  session: {
+    sendPolicy: {
+      default: "deny",
+      rules: [
+        { action: "allow", match: { channel: "slack", chatType: "group" } },
+        // Unlock more channels in Phase 7
+      ],
+    },
+  },
+
+  // --- MCP Tools (Phase 3) ---
+  // tools: {
+  //   mcp: [
+  //     {
+  //       name: "skill-seekers",
+  //       command: "python",
+  //       args: ["-m", "skill_seekers.mcp.server_fastmcp"],
+  //       transport: "stdio",
+  //     },
+  //   ],
+  // },
+
+  // --- Plugins ---
+  plugins: {
+    enabled: true,
+    load: {
+      paths: ["./extensions"],
+    },
+  },
+
+  // --- Cron Jobs ---
+  cron: {
+    jobs: [
+      // Daily morning brief (Phase 4)
+      {
+        id: "daily-morning-brief",
+        agentId: "marketing-orchestrator",
+        enabled: false,                   // Enable after Phase 1 setup
+        schedule: { kind: "cron", expr: "0 9 * * *", tz: "Asia/Shanghai" },
+        payload: {
+          kind: "agentTurn",
+          message: "Morning brief: 1) Search memory for yesterday's campaign results. 2) Review any feedback received. 3) Suggest today's top 3 priorities. 4) Post summary to Slack.",
+        },
+        delivery: { mode: "announce", channel: "slack" },
+      },
+
+      // Weekly strategy reflection (Phase 4)
+      {
+        id: "weekly-strategy-reflection",
+        agentId: "analyst",
+        enabled: false,
+        schedule: { kind: "cron", expr: "0 10 * * 1", tz: "Asia/Shanghai" },
+        payload: {
+          kind: "agentTurn",
+          message: "Weekly reflection: 1) Analyze this week's session transcripts. 2) Identify top 3 wins and 3 failures. 3) Calculate cost per successful campaign action. 4) Update MEMORY.md lessons learned section. 5) Recommend skill improvements or new skills to create.",
+        },
+        delivery: { mode: "announce", channel: "slack" },
+      },
+
+      // Bi-weekly skill evolution (Phase 4)
+      {
+        id: "biweekly-skill-evolution",
+        agentId: "marketing-orchestrator",
+        enabled: false,
+        schedule: { kind: "cron", expr: "0 14 1,15 * *", tz: "Asia/Shanghai" },
+        payload: {
+          kind: "agentTurn",
+          message: "Skill evolution cycle: 1) Review skill effectiveness data in MEMORY.md. 2) Identify gaps - tasks where no skill was available. 3) Use skill-from-masters to create 1-2 new skills for top gaps. 4) Use clawhub search to find existing skills for other gaps. 5) Save new skills to skills/evolved/ directory. 6) Update MEMORY.md skill inventory.",
+        },
+      },
+
+      // Weekly knowledge ingest (Phase 3)
+      {
+        id: "weekly-knowledge-ingest",
+        agentId: "marketing-orchestrator",
+        enabled: false,
+        schedule: { kind: "cron", expr: "0 3 * * 0", tz: "Asia/Shanghai" },
+        payload: {
+          kind: "agentTurn",
+          message: "Use skill-seekers to refresh knowledge from our tracked marketing blogs and competitor sites. Summarize any new insights and update MEMORY.md.",
+        },
+      },
+
+      // Daily cost report (Phase 5)
+      {
+        id: "daily-cost-report",
+        agentId: "analyst",
+        enabled: false,
+        schedule: { kind: "cron", expr: "0 18 * * *", tz: "Asia/Shanghai" },
+        payload: {
+          kind: "agentTurn",
+          message: "Daily cost report: 1) Load today's session usage data. 2) Break down cost by agent (orchestrator vs content-writer vs analyst). 3) Calculate cost per marketing action. 4) Flag if daily spend exceeds $20. 5) Post summary to Slack with trend vs last 7 days.",
+        },
+        delivery: { mode: "announce", channel: "slack" },
+      },
+    ],
+  },
+}
