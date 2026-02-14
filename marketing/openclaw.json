@@ -51,8 +51,8 @@
   agents: {
     defaults: {
       model: {
-        primary: "claude-sonnet-4-5-20250929",
-        fallbacks: ["claude-opus-4-6"],
+        primary: "anthropic/claude-sonnet-4-5-20250929",
+        fallbacks: ["anthropic/claude-opus-4-6"],
       },
     },
 
@@ -64,8 +64,8 @@
         name: "Marketing Orchestrator",
         workspace: "./workspaces/marketing",
         model: {
-          primary: "claude-sonnet-4-5-20250929",
-          fallbacks: ["claude-opus-4-6"],
+          primary: "anthropic/claude-sonnet-4-5-20250929",
+          fallbacks: ["anthropic/claude-opus-4-6"],
         },
         skills: [
           "clawhub",
@@ -77,7 +77,7 @@
         ],
         subagents: {
           allowAgents: ["content-writer", "analyst"],
-          model: "claude-sonnet-4-5-20250929",
+          model: "anthropic/claude-sonnet-4-5-20250929",
         },
         tools: {
           profile: "full",
@@ -99,7 +99,7 @@
         id: "content-writer",
         name: "Content Writer",
         workspace: "./workspaces/content",
-        model: "claude-sonnet-4-5-20250929",
+        model: "anthropic/claude-sonnet-4-5-20250929",
         skills: ["content-calendar", "seo-analyzer"],
         tools: {
           profile: "full",
@@ -117,8 +117,8 @@
         name: "Marketing Analyst",
         workspace: "./workspaces/analytics",
         model: {
-          primary: "claude-opus-4-6",
-          fallbacks: ["claude-sonnet-4-5-20250929"],
+          primary: "anthropic/claude-opus-4-6",
+          fallbacks: ["anthropic/claude-sonnet-4-5-20250929"],
         },
         skills: ["campaign-analytics"],
         tools: {
