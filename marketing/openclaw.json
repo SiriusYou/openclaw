@@ -155,13 +155,11 @@
     },
   ],
 
-  // --- Session Send Policy (default-deny external) ---
+  // --- Session Send Policy ---
+  // default: "allow" permits CLI testing; Slack-specific rules can be added later
   session: {
     sendPolicy: {
-      default: "deny",
-      rules: [
-        { action: "allow", match: { channel: "slack", chatType: "group" } },
-      ],
+      default: "allow",
     },
   },
 
