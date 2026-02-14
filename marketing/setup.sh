@@ -218,12 +218,12 @@ step 5 "Copying configuration and seed files"
 # Create config directory
 mkdir -p "$CONFIG_DIR"
 
-# Copy config.json5
-if [ ! -f "$CONFIG_DIR/config.json5" ]; then
-  cp "$MARKETING_DIR/config.json5" "$CONFIG_DIR/config.json5"
-  ok "Copied config.json5 to $CONFIG_DIR/"
+# Copy openclaw.json
+if [ ! -f "$CONFIG_DIR/openclaw.json" ]; then
+  cp "$MARKETING_DIR/openclaw.json" "$CONFIG_DIR/openclaw.json"
+  ok "Copied openclaw.json to $CONFIG_DIR/"
 else
-  warn "config.json5 already exists in $CONFIG_DIR/, skipping"
+  warn "openclaw.json already exists in $CONFIG_DIR/, skipping"
 fi
 
 # Seed MEMORY.md files (only if not already present)
