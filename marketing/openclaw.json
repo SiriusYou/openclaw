@@ -151,6 +151,10 @@
   bindings: [
     {
       agentId: "marketing-orchestrator",
+      match: { channel: "telegram", accountId: "*" },
+    },
+    {
+      agentId: "marketing-orchestrator",
       match: { channel: "slack", accountId: "*" },
     },
   ],
