@@ -8,6 +8,7 @@
 
   // --- Gateway Security ---
   gateway: {
+    mode: "local",                       // Required for gateway startup
     bind: "loopback",                    // NEVER "lan" or "0.0.0.0" unless behind Tailscale
     port: 18789,
     trustedProxies: [],
