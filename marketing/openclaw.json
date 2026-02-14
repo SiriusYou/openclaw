@@ -22,15 +22,16 @@
   },
 
   // --- Memory ---
+  // NOTE: Paths use __WORKSPACE_ROOT__ placeholder, resolved by setup.sh
   memory: {
     backend: "builtin",
     citations: "auto",
     qmd: {
       paths: [
-        { path: "workspaces/marketing/memory/", name: "Marketing Knowledge" },
-        { path: "workspaces/marketing/strategies/", name: "Campaign Strategies" },
-        { path: "workspaces/marketing/performance/", name: "Performance Data" },
-        { path: "workspaces/analytics/memory/", name: "Market Research" },
+        { path: "__WORKSPACE_ROOT__/marketing/memory/", name: "Marketing Knowledge" },
+        { path: "__WORKSPACE_ROOT__/marketing/strategies/", name: "Campaign Strategies" },
+        { path: "__WORKSPACE_ROOT__/marketing/performance/", name: "Performance Data" },
+        { path: "__WORKSPACE_ROOT__/analytics/memory/", name: "Market Research" },
       ],
       sessions: {
         enabled: true,
@@ -62,7 +63,7 @@
         id: "marketing-orchestrator",
         default: true,
         name: "Marketing Orchestrator",
-        workspace: "./workspaces/marketing",
+        workspace: "__WORKSPACE_ROOT__/marketing",
         model: {
           primary: "anthropic/claude-sonnet-4-5-20250929",
           fallbacks: ["anthropic/claude-opus-4-6"],
@@ -98,7 +99,7 @@
       {
         id: "content-writer",
         name: "Content Writer",
-        workspace: "./workspaces/content",
+        workspace: "__WORKSPACE_ROOT__/content",
         model: "anthropic/claude-sonnet-4-5-20250929",
         skills: ["content-calendar", "seo-analyzer"],
         tools: {
@@ -115,7 +116,7 @@
       {
         id: "analyst",
         name: "Marketing Analyst",
-        workspace: "./workspaces/analytics",
+        workspace: "__WORKSPACE_ROOT__/analytics",
         model: {
           primary: "anthropic/claude-opus-4-6",
           fallbacks: ["anthropic/claude-sonnet-4-5-20250929"],
