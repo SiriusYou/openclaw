@@ -41,7 +41,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OPENCLAW_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 MARKETING_DIR="$SCRIPT_DIR"
 WORKSPACES_DIR="$MARKETING_DIR/workspaces"
-CONFIG_DIR="$HOME/.openclaw-marketing"
+CONFIG_DIR="$HOME/.openclaw"
 ENV_FILE="$MARKETING_DIR/.env"
 
 # ============================================================================
@@ -114,9 +114,11 @@ if [ "${REGEN_ENV:-0}" = "1" ]; then
 # Generated: $(date -u '+%Y-%m-%dT%H:%M:%SZ')
 # ============================================================================
 
-# --- LLM Providers (REQUIRED: set at least one) ---
-ANTHROPIC_API_KEY=sk-ant-REPLACE_ME
-# OPENAI_API_KEY=sk-REPLACE_ME
+# --- LLM Providers ---
+# If you used 'openclaw onboard' with subscription auth, leave these commented out.
+# Only set if using API keys instead of subscription.
+# ANTHROPIC_API_KEY=sk-ant-...
+# OPENAI_API_KEY=sk-...
 
 # --- Gateway ---
 OPENCLAW_GATEWAY_TOKEN=${GATEWAY_TOKEN}
@@ -144,7 +146,7 @@ OPENCLAW_DIAGNOSTICS=1
 EOF
 
   ok "Generated .env with gateway token: ${GATEWAY_TOKEN:0:8}..."
-  warn "IMPORTANT: Edit $ENV_FILE and set your ANTHROPIC_API_KEY before starting!"
+  info "Using subscription auth from 'openclaw onboard'. No API key needed in .env."
 fi
 
 # ============================================================================
@@ -310,8 +312,24 @@ set +a
 
 VALID=1
 
-if [ "${ANTHROPIC_API_KEY:-}" = "sk-ant-REPLACE_ME" ] || [ -z "${ANTHROPIC_API_KEY:-}" ]; then
-  err "ANTHROPIC_API_KEY not set in $ENV_FILE"
+# Check for auth: either API key in .env OR subscription auth-profiles from onboard
+HAS_API_KEY=0
+HAS_SUBSCRIPTION=0
+
+if [ -n "${ANTHROPIC_API_KEY:-}" ] && [ "${ANTHROPIC_API_KEY:-}" != "sk-ant-REPLACE_ME" ]; then
+  HAS_API_KEY=1
+  ok "API key found in .env"
+fi
+
+if [ -f "$CONFIG_DIR/agents/main/agent/auth-profiles.json" ]; then
+  HAS_SUBSCRIPTION=1
+  ok "Subscription auth-profiles found (from openclaw onboard)"
+fi
+
+if [ "$HAS_API_KEY" -eq 0 ] && [ "$HAS_SUBSCRIPTION" -eq 0 ]; then
+  err "No authentication found. Either:"
+  err "  - Set ANTHROPIC_API_KEY in $ENV_FILE, or"
+  err "  - Run 'openclaw onboard' to configure subscription auth"
   VALID=0
 fi
 
@@ -322,12 +340,12 @@ fi
 
 if [ "$VALID" -eq 0 ]; then
   echo ""
-  warn "Configuration incomplete. Edit $ENV_FILE with your API keys, then run:"
+  warn "Configuration incomplete. Fix the above issues, then run:"
   echo ""
   echo "  cd $MARKETING_DIR"
   echo "  docker compose -f docker-compose.marketing.yml up -d"
   echo ""
-  echo "Or re-run this script after updating .env."
+  echo "Or re-run this script after fixing."
   exit 0
 fi
 
