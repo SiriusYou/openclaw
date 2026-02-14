@@ -1,0 +1,8 @@
+{
+  "id": "marketing-feedback",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
