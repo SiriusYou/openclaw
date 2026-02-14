@@ -59,8 +59,12 @@
 
     list: [
       // --- Marketing Orchestrator ---
+      // NOTE: id MUST be "main" — OpenClaw has a bug where session path
+      // validation always checks against agents/main/sessions/ regardless
+      // of the actual agent ID. Using any other ID causes:
+      //   "Session file path must be within sessions directory"
       {
-        id: "marketing-orchestrator",
+        id: "main",
         default: true,
         name: "Marketing Orchestrator",
         workspace: "__WORKSPACE_ROOT__/marketing",
@@ -151,11 +155,11 @@
   // --- Channel Bindings ---
   bindings: [
     {
-      agentId: "marketing-orchestrator",
+      agentId: "main",
       match: { channel: "telegram", accountId: "*" },
     },
     {
-      agentId: "marketing-orchestrator",
+      agentId: "main",
       match: { channel: "slack", accountId: "*" },
     },
   ],
