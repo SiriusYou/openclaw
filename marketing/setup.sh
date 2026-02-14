@@ -40,8 +40,8 @@ step()  { echo -e "\n${GREEN}━━━ Step $1: $2 ━━━${NC}"; }
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OPENCLAW_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 MARKETING_DIR="$SCRIPT_DIR"
-WORKSPACES_DIR="$MARKETING_DIR/workspaces"
 CONFIG_DIR="$HOME/.openclaw"
+WORKSPACES_DIR="$CONFIG_DIR/workspaces"
 ENV_FILE="$MARKETING_DIR/.env"
 
 # ============================================================================
@@ -218,15 +218,23 @@ step 5 "Copying configuration and seed files"
 # Create config directory
 mkdir -p "$CONFIG_DIR"
 
-# Copy openclaw.json
+# Copy openclaw.json and resolve workspace path placeholders
 if [ ! -f "$CONFIG_DIR/openclaw.json" ]; then
-  cp "$MARKETING_DIR/openclaw.json" "$CONFIG_DIR/openclaw.json"
-  ok "Copied openclaw.json to $CONFIG_DIR/"
+  sed "s|__WORKSPACE_ROOT__|${WORKSPACES_DIR}|g" \
+    "$MARKETING_DIR/openclaw.json" > "$CONFIG_DIR/openclaw.json"
+  ok "Copied openclaw.json to $CONFIG_DIR/ (workspace paths: $WORKSPACES_DIR)"
 else
   warn "openclaw.json already exists in $CONFIG_DIR/, skipping"
+  # Check if existing config still has unresolved placeholders
+  if grep -q '__WORKSPACE_ROOT__' "$CONFIG_DIR/openclaw.json" 2>/dev/null; then
+    info "Resolving __WORKSPACE_ROOT__ placeholders in existing config..."
+    sed -i.bak "s|__WORKSPACE_ROOT__|${WORKSPACES_DIR}|g" "$CONFIG_DIR/openclaw.json"
+    rm -f "$CONFIG_DIR/openclaw.json.bak"
+    ok "Workspace paths resolved to: $WORKSPACES_DIR"
+  fi
 fi
 
-# Seed MEMORY.md files (only if not already present)
+# Seed MEMORY.md files from repo templates (only if not already present)
 for agent_dir in marketing content analytics; do
   src="$MARKETING_DIR/workspaces/$agent_dir/MEMORY.md"
   dst="$WORKSPACES_DIR/$agent_dir/MEMORY.md"
