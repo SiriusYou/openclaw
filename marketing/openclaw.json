@@ -61,11 +61,14 @@
   // --- Agents ---
   agents: {
     defaults: {
-      // Primary: OpenAI subscription → Fallback: Gemini subscription
-      // When OpenAI quota exhausted → auto-switch to Gemini
+      // Primary: OpenAI subscription → Fallbacks: Antigravity (Claude + Gemini)
+      // Antigravity provides both Claude and Gemini via Google Cloud subscription
       model: {
         primary: "openai-codex/gpt-5.3-codex",
-        fallbacks: ["google-antigravity/gemini-2.5-pro"],
+        fallbacks: [
+          "google-antigravity/claude-opus-4-6-thinking",
+          "google-antigravity/gemini-3-pro-high",
+        ],
       },
     },
 
@@ -82,7 +85,10 @@
         workspace: "__WORKSPACE_ROOT__/marketing",
         model: {
           primary: "openai-codex/gpt-5.3-codex",
-          fallbacks: ["google-antigravity/gemini-2.5-pro"],
+          fallbacks: [
+            "google-antigravity/claude-opus-4-6-thinking",
+            "google-antigravity/gemini-3-pro-high",
+          ],
         },
         skills: [
           "clawhub",
@@ -94,7 +100,7 @@
         ],
         subagents: {
           allowAgents: ["content-writer", "analyst"],
-          model: "openai-codex/gpt-5.3-codex",
+          model: "google-antigravity/gemini-3-flash",
         },
         tools: {
           profile: "full",
@@ -118,7 +124,10 @@
         workspace: "__WORKSPACE_ROOT__/content",
         model: {
           primary: "openai-codex/gpt-5.3-codex",
-          fallbacks: ["google-antigravity/gemini-2.5-pro"],
+          fallbacks: [
+            "google-antigravity/claude-opus-4-6-thinking",
+            "google-antigravity/gemini-3-pro-high",
+          ],
         },
         skills: ["content-calendar", "seo-analyzer"],
         tools: {
@@ -137,8 +146,11 @@
         name: "Marketing Analyst",
         workspace: "__WORKSPACE_ROOT__/analytics",
         model: {
-          primary: "google-antigravity/gemini-2.5-pro",
-          fallbacks: ["openai-codex/gpt-5.3-codex"],
+          primary: "google-antigravity/claude-opus-4-6-thinking",
+          fallbacks: [
+            "google-antigravity/gemini-3-pro-high",
+            "openai-codex/gpt-5.3-codex",
+          ],
         },
         skills: ["campaign-analytics"],
         tools: {
