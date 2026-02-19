@@ -11,6 +11,16 @@
     trustedProxies: [],
   },
 
+  // --- Auth: multi-account failover ---
+  // When one account's quota runs out, auto-switch to the next profile,
+  // then fall back to the next provider in the model fallback chain.
+  auth: {
+    cooldowns: {
+      billingBackoffHours: 1,      // retry exhausted account after 1h
+      billingMaxHours: 12,         // max backoff cap
+    },
+  },
+
   // --- Logging & Diagnostics ---
   logging: {
     level: "info",
@@ -51,9 +61,11 @@
   // --- Agents ---
   agents: {
     defaults: {
+      // Primary: OpenAI subscription → Fallback: Gemini subscription
+      // When OpenAI quota exhausted → auto-switch to Gemini
       model: {
-        primary: "anthropic/claude-sonnet-4-5-20250929",
-        fallbacks: ["anthropic/claude-opus-4-6"],
+        primary: "openai-codex/gpt-5.3-codex",
+        fallbacks: ["google-antigravity/gemini-2.5-pro"],
       },
     },
 
@@ -69,8 +81,8 @@
         name: "Marketing Orchestrator",
         workspace: "__WORKSPACE_ROOT__/marketing",
         model: {
-          primary: "anthropic/claude-sonnet-4-5-20250929",
-          fallbacks: ["anthropic/claude-opus-4-6"],
+          primary: "openai-codex/gpt-5.3-codex",
+          fallbacks: ["google-antigravity/gemini-2.5-pro"],
         },
         skills: [
           "clawhub",
@@ -82,7 +94,7 @@
         ],
         subagents: {
           allowAgents: ["content-writer", "analyst"],
-          model: "anthropic/claude-sonnet-4-5-20250929",
+          model: "openai-codex/gpt-5.3-codex",
         },
         tools: {
           profile: "full",
@@ -104,7 +116,10 @@
         id: "content-writer",
         name: "Content Writer",
         workspace: "__WORKSPACE_ROOT__/content",
-        model: "anthropic/claude-sonnet-4-5-20250929",
+        model: {
+          primary: "openai-codex/gpt-5.3-codex",
+          fallbacks: ["google-antigravity/gemini-2.5-pro"],
+        },
         skills: ["content-calendar", "seo-analyzer"],
         tools: {
           profile: "full",
@@ -122,8 +137,8 @@
         name: "Marketing Analyst",
         workspace: "__WORKSPACE_ROOT__/analytics",
         model: {
-          primary: "anthropic/claude-opus-4-6",
-          fallbacks: ["anthropic/claude-sonnet-4-5-20250929"],
+          primary: "google-antigravity/gemini-2.5-pro",
+          fallbacks: ["openai-codex/gpt-5.3-codex"],
         },
         skills: ["campaign-analytics"],
         tools: {
