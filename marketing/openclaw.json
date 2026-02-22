@@ -70,6 +70,16 @@
           "google-antigravity/gemini-3.1-pro-high",
         ],
       },
+      // All agents sandboxed by default — tool execution in Docker containers
+      sandbox: {
+        mode: "all",
+        workspaceAccess: "rw",
+        docker: {
+          network: "none",        // no internet access
+          readOnlyRoot: true,     // read-only filesystem
+          capDrop: ["ALL"],       // all capabilities removed
+        },
+      },
     },
 
     list: [
