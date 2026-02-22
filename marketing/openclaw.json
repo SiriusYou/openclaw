@@ -67,7 +67,7 @@
         primary: "openai-codex/gpt-5.3-codex",
         fallbacks: [
           "google-antigravity/claude-opus-4-6-thinking",
-          "google-antigravity/gemini-3-pro-high",
+          "google-antigravity/gemini-3.1-pro-high",
         ],
       },
     },
@@ -87,7 +87,7 @@
           primary: "openai-codex/gpt-5.3-codex",
           fallbacks: [
             "google-antigravity/claude-opus-4-6-thinking",
-            "google-antigravity/gemini-3-pro-high",
+            "google-antigravity/gemini-3.1-pro-high",
           ],
         },
         skills: [
@@ -100,7 +100,7 @@
         ],
         subagents: {
           allowAgents: ["content-writer", "analyst"],
-          model: "google-antigravity/gemini-3-flash",
+          model: "google-antigravity/gemini-3.1-flash",
         },
         tools: {
           profile: "full",
@@ -126,7 +126,7 @@
           primary: "openai-codex/gpt-5.3-codex",
           fallbacks: [
             "google-antigravity/claude-opus-4-6-thinking",
-            "google-antigravity/gemini-3-pro-high",
+            "google-antigravity/gemini-3.1-pro-high",
           ],
         },
         skills: ["content-calendar", "seo-analyzer"],
@@ -148,7 +148,7 @@
         model: {
           primary: "google-antigravity/claude-opus-4-6-thinking",
           fallbacks: [
-            "google-antigravity/gemini-3-pro-high",
+            "google-antigravity/gemini-3.1-pro-high",
             "openai-codex/gpt-5.3-codex",
           ],
         },
