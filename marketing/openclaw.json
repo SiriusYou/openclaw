@@ -66,8 +66,8 @@
       model: {
         primary: "openai-codex/gpt-5.3-codex",
         fallbacks: [
-          "google-antigravity/claude-opus-4-6-thinking",
           "google-antigravity/gemini-3.1-pro-high",
+          "google-antigravity/claude-opus-4-6-thinking",
         ],
       },
       // All agents sandboxed by default — tool execution in Docker containers
@@ -96,8 +96,8 @@
         model: {
           primary: "openai-codex/gpt-5.3-codex",
           fallbacks: [
-            "google-antigravity/claude-opus-4-6-thinking",
             "google-antigravity/gemini-3.1-pro-high",
+            "google-antigravity/claude-opus-4-6-thinking",
           ],
         },
         skills: [
@@ -110,7 +110,7 @@
         ],
         subagents: {
           allowAgents: ["content-writer", "analyst"],
-          model: "google-antigravity/gemini-3.1-flash",
+          model: "google-antigravity/gemini-3.1-pro-low",
         },
         tools: {
           profile: "full",
@@ -135,8 +135,8 @@
         model: {
           primary: "openai-codex/gpt-5.3-codex",
           fallbacks: [
-            "google-antigravity/claude-opus-4-6-thinking",
             "google-antigravity/gemini-3.1-pro-high",
+            "google-antigravity/claude-sonnet-4-6-thinking",
           ],
         },
         skills: ["content-calendar", "seo-analyzer"],
@@ -156,9 +156,9 @@
         name: "Marketing Analyst",
         workspace: "__WORKSPACE_ROOT__/analytics",
         model: {
-          primary: "google-antigravity/claude-opus-4-6-thinking",
+          primary: "google-antigravity/gemini-3.1-pro-high",
           fallbacks: [
-            "google-antigravity/gemini-3.1-pro-high",
+            "google-antigravity/claude-opus-4-6-thinking",
             "openai-codex/gpt-5.3-codex",
           ],
         },
