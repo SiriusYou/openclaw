@@ -61,13 +61,13 @@
   // --- Agents ---
   agents: {
     defaults: {
-      // Primary: OpenAI subscription → Fallbacks: Antigravity (Claude + Gemini)
-      // Antigravity provides both Claude and Gemini via Google Cloud subscription
+      // Primary: OpenAI subscription → Fallbacks: Google (free tier) → OpenRouter (pay-per-use)
+      // Three-tier provider architecture: openai-codex, google, openrouter
       model: {
         primary: "openai-codex/gpt-5.3-codex",
         fallbacks: [
-          "google-antigravity/gemini-3.1-pro-high",
-          "google-antigravity/claude-opus-4-6-thinking",
+          "google/gemini-3-pro-preview",
+          "openrouter/auto",
         ],
       },
       // All agents sandboxed by default — tool execution in Docker containers
@@ -96,8 +96,8 @@
         model: {
           primary: "openai-codex/gpt-5.3-codex",
           fallbacks: [
-            "google-antigravity/gemini-3.1-pro-high",
-            "google-antigravity/claude-opus-4-6-thinking",
+            "google/gemini-3-pro-preview",
+            "openrouter/auto",
           ],
         },
         skills: [
@@ -110,7 +110,13 @@
         ],
         subagents: {
           allowAgents: ["content-writer", "analyst"],
-          model: "google-antigravity/gemini-3.1-pro-low",
+          model: {
+            primary: "google/gemini-3-flash-preview",
+            fallbacks: [
+              "openai-codex/gpt-5.3-codex",
+              "openrouter/auto",
+            ],
+          },
         },
         tools: {
           profile: "full",
@@ -135,8 +141,8 @@
         model: {
           primary: "openai-codex/gpt-5.3-codex",
           fallbacks: [
-            "google-antigravity/gemini-3.1-pro-high",
-            "google-antigravity/claude-sonnet-4-6-thinking",
+            "google/gemini-3-pro-preview",
+            "openrouter/auto",
           ],
         },
         skills: ["content-calendar", "seo-analyzer"],
@@ -156,9 +162,9 @@
         name: "Marketing Analyst",
         workspace: "__WORKSPACE_ROOT__/analytics",
         model: {
-          primary: "google-antigravity/gemini-3.1-pro-high",
+          primary: "google/gemini-3-pro-preview",
           fallbacks: [
-            "google-antigravity/claude-opus-4-6-thinking",
+            "openrouter/auto",
             "openai-codex/gpt-5.3-codex",
           ],
         },
