@@ -114,11 +114,13 @@ if [ "${REGEN_ENV:-0}" = "1" ]; then
 # Generated: $(date -u '+%Y-%m-%dT%H:%M:%SZ')
 # ============================================================================
 
-# --- LLM Providers ---
-# If you used 'openclaw onboard' with subscription auth, leave these commented out.
-# Only set if using API keys instead of subscription.
-# ANTHROPIC_API_KEY=sk-ant-...
+# --- LLM Providers (Three-Tier Architecture) ---
+# Tier 1: OpenAI Codex — if you used 'openclaw onboard' with subscription, no key needed.
 # OPENAI_API_KEY=sk-...
+# Tier 2: Google Gemini (API key or auth profile)
+# GEMINI_API_KEY=...
+# Tier 3: OpenRouter (last-resort fallback)
+# OPENROUTER_API_KEY=sk-or-...
 
 # --- Gateway ---
 OPENCLAW_GATEWAY_TOKEN=${GATEWAY_TOKEN}
@@ -320,24 +322,30 @@ set +a
 
 VALID=1
 
-# Check for auth: either API key in .env OR subscription auth-profiles from onboard
+# Check for auth: API key in .env OR auth-profiles (from onboard / manual setup)
 HAS_API_KEY=0
 HAS_SUBSCRIPTION=0
 
-if [ -n "${ANTHROPIC_API_KEY:-}" ] && [ "${ANTHROPIC_API_KEY:-}" != "sk-ant-REPLACE_ME" ]; then
-  HAS_API_KEY=1
-  ok "API key found in .env"
-fi
+# Check for any provider API key in .env
+for key_var in OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY ANTHROPIC_API_KEY; do
+  val="${!key_var:-}"
+  if [ -n "$val" ] && [[ "$val" != *"REPLACE_ME"* ]] && [ "${#val}" -gt 10 ]; then
+    HAS_API_KEY=1
+    ok "API key found in .env ($key_var)"
+    break
+  fi
+done
 
 if [ -f "$CONFIG_DIR/agents/main/agent/auth-profiles.json" ]; then
   HAS_SUBSCRIPTION=1
-  ok "Subscription auth-profiles found (from openclaw onboard)"
+  ok "Auth profiles found (subscription or API key profiles)"
 fi
 
 if [ "$HAS_API_KEY" -eq 0 ] && [ "$HAS_SUBSCRIPTION" -eq 0 ]; then
   err "No authentication found. Either:"
-  err "  - Set ANTHROPIC_API_KEY in $ENV_FILE, or"
-  err "  - Run 'openclaw onboard' to configure subscription auth"
+  err "  - Set an API key in $ENV_FILE (GEMINI_API_KEY, OPENROUTER_API_KEY, etc.), or"
+  err "  - Run 'openclaw onboard' to configure subscription auth (openai-codex), or"
+  err "  - Add auth profiles via 'openclaw models auth login --provider <id>'"
   VALID=0
 fi
 
@@ -407,7 +415,7 @@ echo "    # Run CLI interactively"
 echo "    docker compose -f $MARKETING_DIR/docker-compose.marketing.yml run --rm openclaw-cli"
 echo ""
 echo "    # Test orchestrator"
-echo "    openclaw agent --agent marketing-orchestrator -m 'List your available skills'"
+echo "    openclaw agent --agent main -m 'List your available skills'"
 echo ""
 echo "    # View browser sandbox"
 echo "    open http://127.0.0.1:6080"
