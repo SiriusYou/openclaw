@@ -107,6 +107,8 @@
           "skill-from-notebook",
           "campaign-brief",
           "content-ab-test",
+          "campaign-diagnosis",
+          "structured-brainstorm",
         ],
         subagents: {
           allowAgents: ["content-writer", "analyst"],
