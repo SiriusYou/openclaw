@@ -13,6 +13,15 @@ const TRACKED_AGENT_IDS: ReadonlySet<string> = new Set([
   "analyst",
 ]);
 
+const FEEDBACK_KEYWORDS = [
+  "worked well",
+  "didn't work",
+  "great results",
+  "poor performance",
+  "feedback:",
+  "learnings:",
+];
+
 export default {
   id: "marketing-feedback",
   name: "Marketing Feedback Loop",
@@ -20,69 +29,41 @@ export default {
     "Records agent skill usage, detects campaign feedback, and injects memory reminders.",
 
   register(api: OpenClawPluginApi) {
-    // --- Record skill effectiveness after each agent run ---
-    api.on("agent_end", async (event, ctx) => {
+    // Record agent run outcome (fire-and-forget)
+    api.on("agent_end", (event, ctx) => {
       const agentId = ctx.agentId ?? "";
-      if (!TRACKED_AGENT_IDS.has(agentId)) {
-        return;
-      }
+      if (!TRACKED_AGENT_IDS.has(agentId)) return;
 
-      const ev = event as Record<string, unknown>;
-      const toolsUsed = ev.toolsUsed ?? [];
-      const stopReason = ev.stopReason ?? "unknown";
-      const usage = ev.usage as { totalTokens?: number } | undefined;
-      const durationMs = ev.durationMs ?? 0;
+      const status = event.success
+        ? "success"
+        : `failed: ${event.error ?? "unknown"}`;
 
-      const logEntry = [
-        `| ${new Date().toISOString().split("T")[0]}`,
-        `| ${agentId}`,
-        `| ${Array.isArray(toolsUsed) ? toolsUsed.join(", ") : "none"}`,
-        `| ${String(stopReason)}`,
-        `| ${usage?.totalTokens ?? 0}`,
-        `| ${String(durationMs)}ms |`,
-      ].join(" ");
-
-      api.logger.info("feedback", logEntry);
+      api.logger.info(
+        "feedback",
+        `| ${new Date().toISOString().split("T")[0]} | ${agentId} | ${status} | ${event.durationMs ?? 0}ms |`,
+      );
     });
 
-    // --- Detect feedback messages and tag campaigns ---
-    api.on("message_received", async (event) => {
-      const ev = event as Record<string, unknown>;
-      const text = ((ev.text as string | undefined) ?? "").toLowerCase();
+    // Detect feedback messages and tag campaigns
+    api.on("message_received", (event) => {
+      const content = event.content.toLowerCase();
 
-      const feedbackKeywords = [
-        "worked well",
-        "didn't work",
-        "great results",
-        "poor performance",
-        "feedback:",
-        "learnings:",
-      ];
-
-      if (feedbackKeywords.some((kw) => text.includes(kw))) {
+      if (FEEDBACK_KEYWORDS.some((kw) => content.includes(kw))) {
         api.logger.info(
           "feedback",
-          `Campaign feedback detected: ${text.slice(0, 200)}`,
+          `Campaign feedback detected: ${content.slice(0, 200)}`,
         );
       }
     });
 
-    // --- Inject recent lessons before each agent start ---
-    api.on("before_agent_start", async (event, ctx) => {
+    // Inject recent lessons before orchestrator starts (modifying hook)
+    api.on("before_agent_start", (_event, ctx) => {
       if (!ORCHESTRATOR_IDS.has(ctx.agentId ?? "")) return;
 
-      const ev = event as Record<string, unknown>;
-      const sections = ev.systemPromptSections as
-        | Array<{ title: string; content: string }>
-        | undefined;
-
-      if (sections) {
-        sections.push({
-          title: "Reminder",
-          content:
-            "Before making campaign decisions, always search memory for recent lessons: memory_search('campaign lessons learned')",
-        });
-      }
+      return {
+        prependContext:
+          "Before making campaign decisions, always search memory for recent lessons: memory_search('campaign lessons learned')",
+      };
     });
   },
 };

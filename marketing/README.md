@@ -24,7 +24,7 @@ vi .env
 marketing/
 ├── setup.sh                          # One-click bootstrap script
 ├── docker-compose.marketing.yml      # Docker Compose services
-├── config.json5                      # OpenClaw configuration template
+├── openclaw.json                     # OpenClaw configuration template
 ├── .env.example                      # Environment variables template
 ├── workspaces/
 │   ├── marketing/                    # Orchestrator workspace

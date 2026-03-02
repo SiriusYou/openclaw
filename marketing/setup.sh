@@ -249,7 +249,7 @@ for agent_dir in marketing content analytics; do
 done
 
 # Copy custom skill templates
-for skill_dir in campaign-brief content-ab-test; do
+for skill_dir in campaign-brief content-ab-test campaign-diagnosis structured-brainstorm; do
   src="$MARKETING_DIR/workspaces/marketing/skills/core-marketing/$skill_dir/SKILL.md"
   dst="$WORKSPACES_DIR/marketing/skills/core-marketing/$skill_dir/SKILL.md"
   if [ -f "$src" ] && [ ! -f "$dst" ]; then
@@ -374,14 +374,18 @@ step 9 "Starting services"
 
 cd "$MARKETING_DIR"
 
-info "Starting core services (gateway + sandboxes)..."
+# Hybrid mode: start sandbox containers only (gateway runs via Mac App)
+# The gateway service is under profiles: ["full"] and won't start here.
+info "Starting sandbox containers..."
 docker compose -f docker-compose.marketing.yml up -d
 
-info "Waiting for gateway health check..."
+# Health check targets the local (native) gateway, not Docker.
+# Short retry loop handles the case where Mac App was just launched.
+info "Checking local gateway health..."
 RETRIES=0
-MAX_RETRIES=30
+MAX_RETRIES=10
 while [ "$RETRIES" -lt "$MAX_RETRIES" ]; do
-  if curl -sf "http://127.0.0.1:${OPENCLAW_GATEWAY_PORT:-18789}/health" &>/dev/null; then
+  if curl -sf "http://localhost:${OPENCLAW_GATEWAY_PORT:-18789}/health" &>/dev/null; then
     ok "Gateway is healthy!"
     break
   fi
@@ -390,8 +394,8 @@ while [ "$RETRIES" -lt "$MAX_RETRIES" ]; do
 done
 
 if [ "$RETRIES" -eq "$MAX_RETRIES" ]; then
-  warn "Gateway health check timed out. Check logs:"
-  echo "  docker compose -f docker-compose.marketing.yml logs openclaw-gateway"
+  warn "Gateway not running after ${MAX_RETRIES} retries. Please start the OpenClaw app or run: scripts/restart-mac.sh"
+  exit 1
 fi
 
 # ============================================================================
@@ -407,24 +411,24 @@ echo "  Workspaces:     $WORKSPACES_DIR"
 echo "  Compose file:   $MARKETING_DIR/docker-compose.marketing.yml"
 echo "  Environment:    $ENV_FILE"
 echo ""
+echo "  Hybrid mode: Mac App runs gateway, Docker runs sandboxes."
+echo ""
 echo "  Useful commands:"
-echo "    # View logs"
-echo "    docker compose -f $MARKETING_DIR/docker-compose.marketing.yml logs -f"
-echo ""
-echo "    # Run CLI interactively"
-echo "    docker compose -f $MARKETING_DIR/docker-compose.marketing.yml run --rm openclaw-cli"
-echo ""
 echo "    # Test orchestrator"
 echo "    openclaw agent --agent main -m 'List your available skills'"
 echo ""
-echo "    # View browser sandbox"
+echo "    # View sandbox logs"
+echo "    docker compose -f $MARKETING_DIR/docker-compose.marketing.yml logs -f"
+echo ""
+echo "    # View browser sandbox (noVNC)"
 echo "    open http://127.0.0.1:6080"
 echo ""
-echo "    # Stop services"
+echo "    # Stop sandbox containers"
 echo "    docker compose -f $MARKETING_DIR/docker-compose.marketing.yml down"
 echo ""
 echo "  Next steps:"
-echo "    1. Configure Slack channel (Phase 1.3)"
-echo "    2. Install skills from ClawHub (Phase 2.2)"
-echo "    3. Set up knowledge ingestion (Phase 3)"
+echo "    1. Launch OpenClaw Mac App (if not already running)"
+echo "    2. Configure Slack channel (Phase 1.3)"
+echo "    3. Install skills from ClawHub (Phase 2.2)"
+echo "    4. Set up knowledge ingestion (Phase 3)"
 echo ""
