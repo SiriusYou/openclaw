@@ -41,8 +41,8 @@ marketing/
 
 ## Architecture
 
-- **Marketing Orchestrator** (Sonnet 4.5): Task routing, strategy, skill evolution
-- **Content Writer** (Sonnet 4.5): Copy generation, A/B testing, content calendar
-- **Marketing Analyst** (Opus 4.6): Deep analysis, competitive intel, browser automation
+- **Marketing Orchestrator** (`openai-codex/gpt-5.3-codex`): Task routing, strategy, skill evolution
+- **Content Writer** (`openai-codex/gpt-5.3-codex`): Copy generation, A/B testing, content calendar
+- **Marketing Analyst** (`google/gemini-3-pro-preview`, fallback `openrouter/auto`): Deep analysis, competitive intel, browser automation
 
 See `MARKETING_AGENT_SYSTEM_PLAN.md` for the full 9-phase implementation plan.
