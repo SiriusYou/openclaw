@@ -1,5 +1,18 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 
+// Canonical orchestrator ID is "main"; keep legacy alias for backward compat
+const ORCHESTRATOR_IDS: ReadonlySet<string> = new Set([
+  "main",
+  "marketing-orchestrator",
+]);
+
+// Fixed set (not prefix match) to prevent ID drift; add new marketing agents here
+const TRACKED_AGENT_IDS: ReadonlySet<string> = new Set([
+  ...ORCHESTRATOR_IDS,
+  "content-writer",
+  "analyst",
+]);
+
 export default {
   id: "marketing-feedback",
   name: "Marketing Feedback Loop",
@@ -10,23 +23,15 @@ export default {
     // --- Record skill effectiveness after each agent run ---
     api.on("agent_end", async (event, ctx) => {
       const agentId = ctx.agentId ?? "";
-      if (
-        !agentId.startsWith("marketing") &&
-        agentId !== "content-writer" &&
-        agentId !== "analyst"
-      ) {
+      if (!TRACKED_AGENT_IDS.has(agentId)) {
         return;
       }
 
-      const toolsUsed =
-        (event as Record<string, unknown>).toolsUsed ?? [];
-      const stopReason =
-        (event as Record<string, unknown>).stopReason ?? "unknown";
-      const usage = (event as Record<string, unknown>).usage as
-        | { totalTokens?: number }
-        | undefined;
-      const durationMs =
-        (event as Record<string, unknown>).durationMs ?? 0;
+      const ev = event as Record<string, unknown>;
+      const toolsUsed = ev.toolsUsed ?? [];
+      const stopReason = ev.stopReason ?? "unknown";
+      const usage = ev.usage as { totalTokens?: number } | undefined;
+      const durationMs = ev.durationMs ?? 0;
 
       const logEntry = [
         `| ${new Date().toISOString().split("T")[0]}`,
@@ -42,9 +47,8 @@ export default {
 
     // --- Detect feedback messages and tag campaigns ---
     api.on("message_received", async (event) => {
-      const text =
-        ((event as Record<string, unknown>).text as string | undefined)
-          ?.toLowerCase() ?? "";
+      const ev = event as Record<string, unknown>;
+      const text = ((ev.text as string | undefined) ?? "").toLowerCase();
 
       const feedbackKeywords = [
         "worked well",
@@ -65,11 +69,10 @@ export default {
 
     // --- Inject recent lessons before each agent start ---
     api.on("before_agent_start", async (event, ctx) => {
-      if (ctx.agentId !== "marketing-orchestrator") return;
+      if (!ORCHESTRATOR_IDS.has(ctx.agentId ?? "")) return;
 
-      const sections = (
-        event as Record<string, unknown>
-      ).systemPromptSections as
+      const ev = event as Record<string, unknown>;
+      const sections = ev.systemPromptSections as
         | Array<{ title: string; content: string }>
         | undefined;
 
