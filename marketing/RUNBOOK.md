@@ -173,7 +173,26 @@ clawhub install <slug>
 # Note: check if --workdir flag is supported; if not, manually move to workspace
 ```
 
-### Step 3.3: Remove Unavailable Skill References
+### Step 3.3: Create Cross-Workspace Skill Symlinks
+
+ClawHub installs skills to `marketing/skills/`, but subagents resolve skills
+from their own workspace. Symlink skills into each subagent's workspace:
+
+```bash
+# content-writer needs claw1-content-calendar
+ln -s ~/.openclaw/workspaces/marketing/skills/claw1-content-calendar \
+      ~/.openclaw/workspaces/content/skills/claw1-content-calendar
+
+# analyst needs check-analytics
+ln -s ~/.openclaw/workspaces/marketing/skills/check-analytics \
+      ~/.openclaw/workspaces/analytics/skills/check-analytics
+
+# Verify symlinks
+ls -la ~/.openclaw/workspaces/content/skills/
+ls -la ~/.openclaw/workspaces/analytics/skills/
+```
+
+### Step 3.4: Remove Unavailable Skill References (if any)
 
 For skills NOT found on ClawHub, remove from **both** config files:
 
@@ -187,7 +206,7 @@ For skills NOT found on ClawHub, remove from **both** config files:
 
 Then restart gateway (quit and reopen Mac App).
 
-### Step 3.4: Verify Skill Invocation (T4)
+### Step 3.5: Verify Skill Invocation (T4)
 
 ```bash
 # Test at least 1 skill per agent
