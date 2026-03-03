@@ -326,13 +326,25 @@ for entry in "${SKILL_LINKS[@]}"; do
   src_rel="${entry##*:}"
   dst="$WORKSPACES_DIR/$dst_rel"
   src="$WORKSPACES_DIR/$src_rel"
-  if [ -d "$src" ] && [ ! -e "$dst" ]; then
+  if [ ! -d "$src" ]; then
+    warn "Source skill not installed yet: $src_rel (install via clawhub)"
+    continue
+  fi
+  if [ -L "$dst" ]; then
+    # Validate existing symlink points to correct target
+    current="$(readlink "$dst")"
+    if [ "$current" = "$src" ]; then
+      warn "Symlink already correct: $dst_rel"
+    else
+      rm "$dst"
+      ln -s "$src" "$dst"
+      ok "Fixed stale symlink: $dst_rel (was → $current)"
+    fi
+  elif [ -e "$dst" ]; then
+    warn "Non-symlink already exists at $dst_rel — skipping"
+  else
     ln -s "$src" "$dst"
     ok "Symlinked $(basename "$dst_rel") → $(dirname "$dst_rel")/"
-  elif [ -L "$dst" ]; then
-    warn "Symlink already exists: $dst_rel"
-  elif [ ! -d "$src" ]; then
-    warn "Source skill not installed yet: $src_rel (install via clawhub)"
   fi
 done
 
