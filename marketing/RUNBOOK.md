@@ -179,15 +179,15 @@ ClawHub installs skills to `marketing/skills/`, but subagents resolve skills
 from their own workspace. Symlink skills into each subagent's workspace:
 
 ```bash
-# content-writer needs claw1-content-calendar
-ln -s ~/.openclaw/workspaces/marketing/skills/claw1-content-calendar \
-      ~/.openclaw/workspaces/content/skills/claw1-content-calendar
+# content-writer needs claw1-content-calendar (-sfn = idempotent, replaces existing)
+ln -sfn ~/.openclaw/workspaces/marketing/skills/claw1-content-calendar \
+        ~/.openclaw/workspaces/content/skills/claw1-content-calendar
 
 # analyst needs check-analytics
-ln -s ~/.openclaw/workspaces/marketing/skills/check-analytics \
-      ~/.openclaw/workspaces/analytics/skills/check-analytics
+ln -sfn ~/.openclaw/workspaces/marketing/skills/check-analytics \
+        ~/.openclaw/workspaces/analytics/skills/check-analytics
 
-# Verify symlinks
+# Verify symlinks point to correct targets
 ls -la ~/.openclaw/workspaces/content/skills/
 ls -la ~/.openclaw/workspaces/analytics/skills/
 ```
