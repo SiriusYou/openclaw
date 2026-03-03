@@ -210,10 +210,15 @@
   ],
 
   // --- Session Send Policy ---
-  // default: "allow" permits CLI testing; Slack-specific rules can be added later
+  // default: "deny" with explicit allowlist for Telegram + CLI testing
+  // schema: src/config/zod-schema.allowdeny.ts:22-33 → { action, match }
   session: {
     sendPolicy: {
-      default: "allow",
+      default: "deny",
+      rules: [
+        { action: "allow", match: { channel: "telegram" } },
+        { action: "allow", match: { rawKeyPrefix: "agent:main:main" } },
+      ],
     },
   },
 
