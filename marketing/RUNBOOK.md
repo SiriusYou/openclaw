@@ -261,7 +261,7 @@ openclaw cron add \
   --session isolated \
   --cron "0 18 * * *" \
   --tz "Asia/Shanghai" \
-  --message "Daily cost report: break down by agent, flag if >$20/day" \
+  --message 'Daily cost report: break down by agent, flag if >$20/day' \
   --announce --channel telegram --to "<TELEGRAM_CHAT_ID>"
 
 # Record system ID:
@@ -430,11 +430,11 @@ openclaw agent --agent main \
 
 - [ ] `logging.level` reverted to `"info"` in `~/.openclaw/openclaw.json`
 - [ ] Auth-profiles drill backup removed (`*.pre-drill`)
-- [ ] All cron job system IDs recorded below:
+- [ ] All cron job system IDs recorded below (environment-specific — re-run `openclaw cron list` after rebuild):
 
 | Name | System ID |
 |------|-----------|
-| marketing-cost-daily | `ddae0cbc-5c17-4f73-8ef1-63d0ef65bd17` |
+| marketing-cost-daily | `ab63d422-e472-44e6-976a-a0e6d7fec5da` |
 | marketing-brief-daily | `eb89171a-7a9f-48e9-937f-29620e4b6234` |
 | marketing-reflect-weekly | `f75a6dac-ce0c-467f-b848-2e5a502fd17f` |
 | marketing-evolution-semimonthly | `b06b601e-77f8-4528-b469-31468e1a58c1` |
