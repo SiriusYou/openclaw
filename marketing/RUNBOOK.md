@@ -15,7 +15,8 @@ Quit and relaunch the **OpenClaw Mac App** to pick up:
 - Auth profile cleanup (removed anthropic:manual + google-antigravity)
 - Phase C plugin fixes (skill-audit, marketing-feedback)
 
-> Always restart via the Mac App to avoid duplicate gateway instances.
+> **Cold restart** (code/plugin file changes): quit and relaunch the Mac App.
+> **Config-only reload** (plugin enable, auth changes): use `openclaw gateway restart`.
 > Do not use `pkill` + manual `gateway run` — the Mac App manages the gateway lifecycle.
 
 ### Step 1.2: Enable Telegram Plugin & Add Bot Token
@@ -26,7 +27,7 @@ Channel providers are extensions that ship disabled by default. Enable and confi
 # Enable the Telegram plugin (modifies ~/.openclaw/openclaw.json)
 openclaw plugins enable telegram
 
-# Restart gateway to load the plugin
+# Reload gateway config to load the plugin (config-only change, no cold restart needed)
 openclaw gateway restart
 
 # Add the Telegram bot token
