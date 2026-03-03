@@ -221,8 +221,13 @@
 
   // --- Plugins ---
   // ~/.openclaw/extensions/ is auto-discovered, no need for plugins.load.paths
+  // Channel plugins (telegram, discord, etc.) must be explicitly enabled here.
+  // Enable via CLI: openclaw plugins enable <name>
   plugins: {
     enabled: true,
+    entries: {
+      telegram: { enabled: true },
+    },
   },
 
   // --- Cron ---

@@ -18,7 +18,22 @@ Quit and relaunch the **OpenClaw Mac App** to pick up:
 > Always restart via the Mac App to avoid duplicate gateway instances.
 > Do not use `pkill` + manual `gateway run` — the Mac App manages the gateway lifecycle.
 
-### Step 1.2: Channel & Model Probes
+### Step 1.2: Enable Telegram Plugin & Add Bot Token
+
+Channel providers are extensions that ship disabled by default. Enable and configure:
+
+```bash
+# Enable the Telegram plugin (modifies ~/.openclaw/openclaw.json)
+openclaw plugins enable telegram
+
+# Restart gateway to load the plugin
+openclaw gateway restart
+
+# Add the Telegram bot token
+openclaw channels add --channel telegram --token "<TELEGRAM_BOT_TOKEN>"
+```
+
+### Step 1.3: Channel & Model Probes
 
 ```bash
 # Channel probe — Telegram should be "ok", Slack "not connected" is expected
@@ -39,7 +54,7 @@ docker images | grep sandbox
 - [ ] `openclaw models status` shows exactly 3 profiles (no anthropic:manual, no google-antigravity)
 - [ ] Gateway probe: healthy
 
-### Step 1.3: Plugin Verification (temporary debug mode)
+### Step 1.4: Plugin Verification (temporary debug mode)
 
 ```bash
 # 1. Enable debug logging temporarily
@@ -58,7 +73,7 @@ openclaw message send --channel telegram --target <TELEGRAM_CHAT_ID> \
 # Edit ~/.openclaw/openclaw.json → logging.level: "info"
 ```
 
-### Step 1.4: Skill-Audit Block Test (T1)
+### Step 1.5: Skill-Audit Block Test (T1)
 
 To test the skill-audit plugin blocks dangerous patterns, instruct the agent to write
 a skill containing dangerous code patterns (e.g. code execution, filesystem destruction).
@@ -74,7 +89,7 @@ openclaw message send --channel telegram --target <TELEGRAM_CHAT_ID> \
 # Expected: skill-audit plugin should BLOCK this write
 ```
 
-### Step 1.5: sendPolicy Verification (T8)
+### Step 1.6: sendPolicy Verification (T8)
 
 ```bash
 # Test 1: Telegram channel should be allowed
@@ -419,9 +434,9 @@ openclaw agent --agent main \
 
 | Name | System ID |
 |------|-----------|
-| marketing-cost-daily | (fill after Day 5) |
-| marketing-brief-daily | (fill after Day 5) |
-| marketing-reflect-weekly | (fill after Day 5) |
-| marketing-evolution-semimonthly | (fill after Day 5) |
+| marketing-cost-daily | `ddae0cbc-5c17-4f73-8ef1-63d0ef65bd17` |
+| marketing-brief-daily | `eb89171a-7a9f-48e9-937f-29620e4b6234` |
+| marketing-reflect-weekly | `f75a6dac-ce0c-467f-b848-2e5a502fd17f` |
+| marketing-evolution-semimonthly | `b06b601e-77f8-4528-b469-31468e1a58c1` |
 
 - [ ] Runbook validated — all steps reproducible
