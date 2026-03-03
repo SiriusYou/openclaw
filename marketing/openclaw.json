@@ -102,9 +102,6 @@
         },
         skills: [
           "clawhub",
-          "skill-from-masters",
-          "search-skill",
-          "skill-from-notebook",
           "campaign-brief",
           "content-ab-test",
           "campaign-diagnosis",
@@ -147,7 +144,7 @@
             "openrouter/auto",
           ],
         },
-        skills: ["content-calendar", "seo-analyzer"],
+        skills: ["claw1-content-calendar"],
         tools: {
           profile: "full",
           allow: [
@@ -170,7 +167,7 @@
             "openai-codex/gpt-5.3-codex",
           ],
         },
-        skills: ["campaign-analytics"],
+        skills: ["check-analytics"],
         tools: {
           profile: "full",
           allow: [
