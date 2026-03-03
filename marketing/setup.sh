@@ -310,9 +310,38 @@ else
 fi
 
 # ============================================================================
-# Step 8: Validate .env Before Starting Services
+# Step 8: Cross-workspace Skill Symlinks
 # ============================================================================
-step 8 "Validating configuration"
+step 8 "Creating cross-workspace skill symlinks"
+
+# ClawHub installs skills to marketing/skills/, but subagents resolve skills
+# from their own workspace. Symlink skills into each subagent's workspace.
+SKILL_LINKS=(
+  "content/skills/claw1-content-calendar:marketing/skills/claw1-content-calendar"
+  "analytics/skills/check-analytics:marketing/skills/check-analytics"
+)
+
+for entry in "${SKILL_LINKS[@]}"; do
+  dst_rel="${entry%%:*}"
+  src_rel="${entry##*:}"
+  dst="$WORKSPACES_DIR/$dst_rel"
+  src="$WORKSPACES_DIR/$src_rel"
+  if [ -d "$src" ] && [ ! -e "$dst" ]; then
+    ln -s "$src" "$dst"
+    ok "Symlinked $(basename "$dst_rel") → $(dirname "$dst_rel")/"
+  elif [ -L "$dst" ]; then
+    warn "Symlink already exists: $dst_rel"
+  elif [ ! -d "$src" ]; then
+    warn "Source skill not installed yet: $src_rel (install via clawhub)"
+  fi
+done
+
+ok "Cross-workspace skill symlinks done"
+
+# ============================================================================
+# Step 9: Validate .env Before Starting Services
+# ============================================================================
+step 9 "Validating configuration"
 
 # Source .env to check critical vars
 set -a
@@ -368,9 +397,9 @@ fi
 ok "Configuration valid"
 
 # ============================================================================
-# Step 9: Start Services
+# Step 10: Start Services
 # ============================================================================
-step 9 "Starting services"
+step 10 "Starting services"
 
 cd "$MARKETING_DIR"
 
