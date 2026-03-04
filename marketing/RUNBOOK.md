@@ -541,3 +541,16 @@ openclaw gateway restart
 #   ~/.openclaw/logs/gateway.err.log   (errors and warnings)
 #   /tmp/openclaw/openclaw-YYYY-MM-DD.log  (detailed JSON, tool calls, plugin hooks)
 ```
+
+### Config Change Checklist
+
+When editing `marketing/openclaw.json` (source config):
+
+1. Make the change in source: `marketing/openclaw.json`
+2. Apply the same change to runtime: `~/.openclaw/openclaw.json`
+3. Restart gateway: `openclaw gateway restart`
+4. Verify: `openclaw gateway probe`
+5. Commit source change to git
+
+> **Why both?** `setup.sh` only copies source → runtime on first run.
+> Subsequent edits to source alone do NOT update the running gateway.
