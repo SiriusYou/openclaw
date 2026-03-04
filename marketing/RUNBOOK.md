@@ -417,7 +417,7 @@ openclaw agent --agent main \
 | # | Test | Command/Action | Pass Criteria | Result |
 |---|------|----------------|---------------|--------|
 | T1 | skill-audit blocks dangerous write | Instruct agent to write dangerous skill | BLOCKED | **Pass** — model safety + plugin loaded |
-| T2 | Legitimate skill write allowed | Write safe skill to evolved/ | Pass + audit log | **Fail** — see Known Issue below |
+| T2 | Legitimate skill write allowed | Write safe skill to evolved/ | Pass + audit log | **Pass** — fixed via `alsoAllow` |
 | T3 | Provider failover | Corrupt primary token, send msg | Fallback delivers | **Pass** |
 | T4 | Skill invocation per agent | Chat with each agent using skill | No allowlist block | **Pass** |
 | T5 | memory_search hits | 3 queries across directories | Non-empty + source | **Pass** |
@@ -427,15 +427,12 @@ openclaw agent --agent main \
 
 ### Known Issues (2026-03-03)
 
-**T2 Fail — File write blocked in all session types:**
-The `main` agent's `tools.allow` list (`memory_search`, `memory_get`, `sessions_spawn`, `clawhub`)
-acts as a restrictive allowlist. File write tools are not included, so the agent cannot write to
-`skills/evolved/` even in Telegram channel sessions with `workspaceAccess: "rw"`. The agent
-produces valid, safe SKILL.md content but must output it for manual placement.
-
-**Fix (when ready):** Add `file_write` (or equivalent tool name) to `tools.allow` for the `main`
-agent in both `marketing/openclaw.json` and `~/.openclaw/openclaw.json`. This is a security
-trade-off — enables autonomous skill evolution but broadens file access.
+**T2 Fixed (2026-03-04) — `tools.allow` → `tools.alsoAllow`:**
+Root cause: config used `tools.allow` (restrictive allowlist — ONLY those tools) instead of
+`tools.alsoAllow` (additive — profile tools PLUS these extras). With `profile: "full"` and
+`allow`, only the listed tools were available; base tools (read/write/edit/exec) were blocked.
+Fix: renamed `allow` → `alsoAllow` in all 3 agents across both source and runtime configs.
+Agent now has full base tools + memory/sessions/clawhub extras.
 
 **T7 Partial — Skills and subagents not exercised:**
 The agent produced quality campaign briefs and analysis directly, but did not invoke the
