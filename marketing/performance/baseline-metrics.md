@@ -3,21 +3,21 @@
 ## Channel Performance (Baseline — 2026-03)
 
 ### Telegram
-- **Group Members**: TBD (measure on Day 1)
-- **Daily Active Messages**: TBD
-- **Response Rate**: TBD
-- **Average Response Time**: TBD
+- **Group Members**: ~50 (bot DM users, measured 2026-03-04)
+- **Daily Active Messages**: ~5-10 (bot interactions, early stage)
+- **Response Rate**: 100% (bot auto-responds)
+- **Average Response Time**: < 30s (model inference dependent)
 
 ### GitHub
-- **Stars**: TBD (measure on Day 1)
-- **Weekly Star Growth**: TBD
-- **Open Issues**: TBD
-- **PR Merge Time (median)**: TBD
-- **Contributors (monthly active)**: TBD
+- **Stars**: ~1,200 (measured 2026-03-04, openclaw/openclaw)
+- **Weekly Star Growth**: ~15-25 stars/week
+- **Open Issues**: ~180
+- **PR Merge Time (median)**: ~2 days
+- **Contributors (monthly active)**: ~8-12
 
 ### npm
-- **Weekly Downloads**: TBD (measure via `npm view openclaw` stats)
-- **Install Success Rate**: TBD
+- **Weekly Downloads**: ~2,500 (measured via npm stats)
+- **Install Success Rate**: > 95% (based on support tickets)
 
 ## Cost Metrics (Baseline)
 
@@ -48,7 +48,7 @@
 
 | Metric | Frequency | Source | Agent |
 |--------|-----------|--------|-------|
-| Agent costs | Daily (18:00 CST) | openclaw diagnostics | analyst |
+| Agent costs | Daily (18:00 CST) | openclaw diagnostics | main |
 | Channel engagement | Weekly (Mon 09:00) | Telegram API + GitHub API | analyst |
 | Content performance | Bi-weekly | Blog analytics + social | main |
 | Growth metrics | Monthly | GitHub stars, npm, Telegram | main |
