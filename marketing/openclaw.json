@@ -212,6 +212,10 @@
   session: {
     sendPolicy: {
       default: "deny",
+      // NOTE: rawKeyPrefix rules lack channel constraint because sessions_spawn
+      // is evaluated at the WS agent endpoint (no channel attribute). Adding
+      // channel: "telegram" would re-break subagent delegation. When enabling
+      // new channels (e.g. Slack), review these rules to avoid unintended sends.
       rules: [
         { action: "allow", match: { channel: "telegram" } },
         // main agent: CLI, cron, and spawn sessions
