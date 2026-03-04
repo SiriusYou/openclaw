@@ -42,6 +42,7 @@
         { path: "__WORKSPACE_ROOT__/marketing/strategies/", name: "Campaign Strategies" },
         { path: "__WORKSPACE_ROOT__/marketing/performance/", name: "Performance Data" },
         { path: "__WORKSPACE_ROOT__/analytics/memory/", name: "Market Research" },
+        { path: "__WORKSPACE_ROOT__/content/memory/", name: "Content Guidelines" },
       ],
       sessions: {
         enabled: true,
