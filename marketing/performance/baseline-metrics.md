@@ -54,6 +54,6 @@
 | Growth metrics | Monthly | GitHub stars, npm, Telegram | main |
 
 ## Notes
-- All TBD values should be filled after Day 1 gateway startup
-- Use the `marketing-cost-daily` cron job (Day 5) to automate cost tracking
-- Performance data updates should be committed to this file by the analyst agent
+- Baseline values measured 2026-03-04; update quarterly or after significant growth events
+- Use the `marketing-cost-daily` cron job to automate daily cost tracking
+- Performance data updates should be committed to this file by the main agent
