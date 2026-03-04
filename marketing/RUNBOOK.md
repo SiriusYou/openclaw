@@ -414,16 +414,44 @@ openclaw agent --agent main \
 
 ## Acceptance Test Summary
 
-| # | Test | Command/Action | Pass Criteria |
-|---|------|----------------|---------------|
-| T1 | skill-audit blocks dangerous write | Instruct agent to write dangerous skill | BLOCKED |
-| T2 | Legitimate skill write allowed | Write safe skill to evolved/ | Pass + audit log |
-| T3 | Provider failover | Corrupt primary token, send msg | Fallback delivers |
-| T4 | Skill invocation per agent | Chat with each agent using skill | No allowlist block |
-| T5 | memory_search hits | 3 queries across directories | Non-empty + source |
-| T6 | Cron jobs manual trigger | `cron run` each of 4 jobs | All succeed |
-| T7 | Full campaign flow | brief→content→analysis→feedback | One pass, no P0 |
-| T8 | sendPolicy verification | Telegram + CLI path | Both allowed |
+| # | Test | Command/Action | Pass Criteria | Result |
+|---|------|----------------|---------------|--------|
+| T1 | skill-audit blocks dangerous write | Instruct agent to write dangerous skill | BLOCKED | **Pass** — model safety + plugin loaded |
+| T2 | Legitimate skill write allowed | Write safe skill to evolved/ | Pass + audit log | **Fail** — see Known Issue below |
+| T3 | Provider failover | Corrupt primary token, send msg | Fallback delivers | **Pass** |
+| T4 | Skill invocation per agent | Chat with each agent using skill | No allowlist block | **Pass** |
+| T5 | memory_search hits | 3 queries across directories | Non-empty + source | **Pass** |
+| T6 | Cron jobs manual trigger | `cron run` each of 4 jobs | All succeed | **Pass** |
+| T7 | Full campaign flow | brief→content→analysis→feedback | One pass, no P0 | **Partial** — output good, tools limited |
+| T8 | sendPolicy verification | Telegram + CLI path | Both allowed | **Pass** |
+
+### Known Issues (2026-03-03)
+
+**T2 Fail — File write blocked in all session types:**
+The `main` agent's `tools.allow` list (`memory_search`, `memory_get`, `sessions_spawn`, `clawhub`)
+acts as a restrictive allowlist. File write tools are not included, so the agent cannot write to
+`skills/evolved/` even in Telegram channel sessions with `workspaceAccess: "rw"`. The agent
+produces valid, safe SKILL.md content but must output it for manual placement.
+
+**Fix (when ready):** Add `file_write` (or equivalent tool name) to `tools.allow` for the `main`
+agent in both `marketing/openclaw.json` and `~/.openclaw/openclaw.json`. This is a security
+trade-off — enables autonomous skill evolution but broadens file access.
+
+**T7 Partial — Skills and subagents not exercised:**
+The agent produced quality campaign briefs and analysis directly, but did not invoke the
+`campaign-brief` skill, `memory_search`, or delegate to `content-writer`/`analyst` subagents.
+CLI sessions provision only `sessions_spawn`. Telegram sessions provision tools per `tools.allow`
+but subagent delegation requires `sessions_spawn` to work end-to-end.
+
+**CLI vs Channel Session Tool Access:**
+```
+CLI sessions (openclaw agent --message):
+  tools: sessions_spawn only (often blocked by sendPolicy for non-main agents)
+
+Channel sessions (Telegram inbound):
+  tools: per tools.allow list in agent config
+  note: subagent delegation requires sessions_spawn in allow list
+```
 
 ---
 
