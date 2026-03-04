@@ -258,11 +258,12 @@ openclaw agent --agent analyst \
 # 1. Daily cost report → Telegram (18:00 CST daily)
 openclaw cron add \
   --name "marketing-cost-daily" \
-  --agent analyst \
+  --agent main \
   --session isolated \
   --cron "0 18 * * *" \
   --tz "Asia/Shanghai" \
-  --message 'Daily cost report: break down by agent, flag if >$20/day' \
+  --message 'Daily cost report. Do NOT use browser tools. List each agent session from today, sum token usage and estimated cost per agent. Flag any agent over $20/day. If no sessions found, report $0. Keep response under 200 words.' \
+  --timeout-seconds 300 \
   --announce --channel telegram --to "<TELEGRAM_CHAT_ID>"
 
 # Record system ID:
@@ -422,7 +423,7 @@ openclaw agent --agent main \
 | T4 | Skill invocation per agent | Chat with each agent using skill | No allowlist block | **Pass** |
 | T5 | memory_search hits | 3 queries across directories | Non-empty + source | **Pass** |
 | T6 | Cron jobs manual trigger | `cron run` each of 4 jobs | All succeed | **Pass** |
-| T7 | Full campaign flow | brief→content→analysis→feedback | One pass, no P0 | **Partial** — output good, tools limited |
+| T7 | Full campaign flow | brief→content→analysis→feedback | One pass, no P0 | **Pass** — skill+subagent+feedback chain verified |
 | T8 | sendPolicy verification | Telegram + CLI path | Both allowed | **Pass** |
 
 ### Known Issues (2026-03-03)
@@ -434,11 +435,18 @@ Root cause: config used `tools.allow` (restrictive allowlist — ONLY those tool
 Fix: renamed `allow` → `alsoAllow` in all 3 agents across both source and runtime configs.
 Agent now has full base tools + memory/sessions/clawhub extras.
 
-**T7 Partial — Skills and subagents not exercised:**
-The agent produced quality campaign briefs and analysis directly, but did not invoke the
-`campaign-brief` skill, `memory_search`, or delegate to `content-writer`/`analyst` subagents.
-CLI sessions provision only `sessions_spawn`. Telegram sessions provision tools per `tools.allow`
-but subagent delegation requires `sessions_spawn` to work end-to-end.
+**T7 Fixed (2026-03-04) — sendPolicy blocked subagent sessions:**
+Root cause: `sendPolicy` rule `rawKeyPrefix: "agent:main:main"` was too narrow — it only matched
+CLI sessions for the main agent. When main spawned `content-writer` via `sessions_spawn`, the
+spawned session key (`agent:content-writer:spawn:...`) didn't match any allow rule, so the
+gateway blocked it with `send blocked by session policy`.
+Fix: broadened sendPolicy to allow all sessions for configured agents:
+- `agent:main:` — main agent CLI, cron, and spawn sessions
+- `agent:content-writer:` — content-writer subagent sessions
+- `agent:analyst:` — analyst subagent sessions
+Evidence (2026-03-04 16:01 UTC): Telegram inbound → `before_agent_start` hook → main agent
+called `sessions_spawn` (succeeded, 83ms) → spawned agent executed 5 `exec` + 2 `read` tool
+calls → `agent_end` feedback fired on both main and spawned sessions.
 
 **CLI vs Channel Session Tool Access:**
 ```
@@ -446,8 +454,9 @@ CLI sessions (openclaw agent --message):
   tools: sessions_spawn only (often blocked by sendPolicy for non-main agents)
 
 Channel sessions (Telegram inbound):
-  tools: per tools.allow list in agent config
-  note: subagent delegation requires sessions_spawn in allow list
+  tools: per tools.alsoAllow list in agent config
+  note: subagent delegation requires sessions_spawn in alsoAllow list
+        AND sendPolicy rules for spawned agent session keys
 ```
 
 ---
@@ -456,13 +465,79 @@ Channel sessions (Telegram inbound):
 
 - [ ] `logging.level` reverted to `"info"` in `~/.openclaw/openclaw.json`
 - [ ] Auth-profiles drill backup removed (`*.pre-drill`)
-- [ ] All cron job system IDs recorded below (environment-specific — re-run `openclaw cron list` after rebuild):
+- [ ] All cron job system IDs recorded (environment-specific — retrieve with command below):
 
-| Name | System ID |
-|------|-----------|
-| marketing-cost-daily | `ab63d422-e472-44e6-976a-a0e6d7fec5da` |
-| marketing-brief-daily | `eb89171a-7a9f-48e9-937f-29620e4b6234` |
-| marketing-reflect-weekly | `f75a6dac-ce0c-467f-b848-2e5a502fd17f` |
-| marketing-evolution-semimonthly | `b06b601e-77f8-4528-b469-31468e1a58c1` |
+```bash
+# List all cron IDs (re-run after any environment rebuild)
+openclaw cron list --json | jq -r '.jobs[] | "\(.name)\t\(.id)"'
+```
 
 - [ ] Runbook validated — all steps reproducible
+
+---
+
+## Troubleshooting
+
+### Gateway Offline
+
+The gateway runs as a Mac App managed LaunchAgent. Common causes of downtime:
+
+1. **Mac sleep/restart** — the app must be relaunched manually after reboot
+2. **App crash** — check `~/.openclaw/logs/gateway.err.log` for stack traces
+3. **Port conflict** — another process on port 18789
+
+```bash
+# Diagnose
+openclaw gateway probe                    # reachable?
+curl -s -o /dev/null -w "%{http_code}" --connect-timeout 3 http://127.0.0.1:18789/health
+ss -ltnp | grep 18789 2>/dev/null || lsof -i :18789   # port in use?
+
+# Fix
+# Option 1: Relaunch the OpenClaw Mac App (preferred)
+# Option 2: Config-only reload
+openclaw gateway restart
+
+# Verify
+openclaw gateway probe
+openclaw channels status --probe
+```
+
+### Cron Job Errors
+
+```bash
+# 1. List all jobs and their last status
+openclaw cron list
+
+# 2. Check execution history for a specific job
+openclaw cron list --json | jq -r '.jobs[] | "\(.name)\t\(.id)"'
+openclaw cron runs --id <job-id> --limit 5
+
+# 3. Common error patterns:
+#    "cron: job execution timed out" → model inference hung or agent used expensive tools
+#      Fix: simplify prompt, add --timeout-seconds, switch to faster agent
+#    "FailoverError: LLM request timed out" → provider timeout, check model availability
+#      Fix: openclaw models status, verify auth profiles
+#    "send blocked by session policy" → spawned session key not in sendPolicy rules
+#      Fix: add rawKeyPrefix rule for the agent's session namespace
+
+# 4. Manual trigger to test fix
+openclaw cron run <job-id>
+openclaw cron runs --id <job-id> --limit 1   # verify status=ok
+```
+
+### Logging Level Toggle
+
+```bash
+# Temporarily enable debug logging for diagnostics
+# Edit ~/.openclaw/openclaw.json → "logging": { "level": "debug" }
+openclaw gateway restart
+
+# After diagnostics, revert to info
+# Edit ~/.openclaw/openclaw.json → "logging": { "level": "info" }
+openclaw gateway restart
+
+# Debug logs appear in:
+#   ~/.openclaw/logs/gateway.log       (gateway-level, summarized)
+#   ~/.openclaw/logs/gateway.err.log   (errors and warnings)
+#   /tmp/openclaw/openclaw-YYYY-MM-DD.log  (detailed JSON, tool calls, plugin hooks)
+```
