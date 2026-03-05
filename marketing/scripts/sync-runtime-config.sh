@@ -122,7 +122,12 @@ fi
 # --- Show diff ---
 
 if [ -f "$RUNTIME_CONFIG" ]; then
-  DIFF=$(diff --unified=3 "$RUNTIME_CONFIG" <(echo "$MERGED") || true)
+  # Sort keys deeply to avoid false diffs from JSON key ordering
+  SORT_JSON='const fs=require("fs"); function sortDeep(o){if(Array.isArray(o))return o.map(sortDeep);if(o&&typeof o==="object"){const s={};Object.keys(o).sort().forEach(k=>{s[k]=sortDeep(o[k])});return s}return o} const d=JSON.parse(fs.readFileSync("/dev/stdin","utf8")); process.stdout.write(JSON.stringify(sortDeep(d),null,2)+"\n");'
+  DIFF=$(diff --unified=3 \
+    <(node -e "$SORT_JSON" < "$RUNTIME_CONFIG") \
+    <(echo "$MERGED" | node -e "$SORT_JSON") \
+    || true)
   if [ -z "$DIFF" ]; then
     echo "No changes — runtime config is already in sync."
     if [ "$RESTART" = true ] && [ "$DRY_RUN" = false ]; then
