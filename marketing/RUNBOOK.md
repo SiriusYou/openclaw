@@ -313,15 +313,15 @@ openclaw cron add \
   --announce --channel telegram --to "<TELEGRAM_CHAT_ID>" \
   --message "Semimonthly skill evolution cycle. You MUST complete ALL steps:
 
-1. INVENTORY: List existing skills in skills/evolved/ to avoid duplicates. Also note the core skills: campaign-brief, content-ab-test, campaign-diagnosis, structured-brainstorm.
+1. INVENTORY: List existing skills in skills/evolved/ to avoid duplicates. Also note the core skills: campaign-brief, content-ab-test, campaign-diagnosis, structured-brainstorm. Also note ClawHub skills: self-evolution, evolution-drift-detector, marketing-strategy-pmm.
 
 2. ANALYZE: Run memory_search('campaign lessons learned') and memory_search('skill gaps') to identify what's missing.
 
-3. DECIDE: Pick the single highest-impact skill gap NOT already covered by existing skills. Do NOT recreate a skill that already exists.
+3. DECIDE: Pick the single highest-impact skill gap NOT already covered by existing skills (evolved, core, or ClawHub). Do NOT recreate a skill that already exists.
 
-4. CREATE: Write a new SKILL.md file to skills/evolved/<skill-name>/SKILL.md using the write tool. The skill must include: Purpose and when to use, Safety boundaries, Required retrieval steps (memory_search calls), Step-by-step procedure, Output format template, Quality checklist.
+4. CREATE: Write a new SKILL.md file to skills/evolved/<skill-name>/SKILL.md using the write tool. The file MUST start with YAML frontmatter (---/name/description/---), then include: Purpose and when to use, Safety boundaries, Required retrieval steps (memory_search calls), Step-by-step procedure, Output format template, Quality checklist.
 
-5. VERIFY: Read back the file you just wrote to confirm it exists and is valid.
+5. VERIFY: Read back the file you just wrote to confirm it exists, has valid YAML frontmatter, and contains all required sections.
 
 6. REPORT: Summarize what you created, why, and what gap it fills.
 
@@ -335,7 +335,7 @@ openclaw cron list --json | jq '.jobs[] | select(.name=="marketing-evolution-sem
 
 ```bash
 openclaw cron list
-# Expected: 4 enabled jobs
+# Expected: 5 enabled jobs (cost-daily, brief-daily, reflect-weekly, evolution-semimonthly, gateway-health)
 ```
 
 ### Step 5.3: Manual Trigger Test (T6)
