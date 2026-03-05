@@ -63,19 +63,12 @@ Before starting any phase, load context:
 
 **Skill**: `campaign-brief`
 
-**Required fields** (MUST be specified before advancing to Phase 3):
-
-- `channel` — primary distribution channel(s) (e.g. Telegram, Twitter, blog)
-- `recipients` — target recipient list or audience segment with estimated size
-
 1. Generate campaign brief from selected concept
 2. Define: objective, audience segments, channels, timeline, budget, KPIs
-3. **Validate required fields**: confirm `channel` and `recipients` are explicitly specified in the brief. If either is missing, STOP and return an error listing the missing fields. Do NOT proceed to Phase 3.
-4. Run `competitor-monitor` if competitive positioning is a factor
-5. Optionally use `marketing-strategy-pmm` for GTM framing
+3. Run `competitor-monitor` if competitive positioning is a factor
+4. Optionally use `marketing-strategy-pmm` for GTM framing
 
-**Gate**: Brief complete with measurable KPIs AND `channel` + `recipients` specified? → Proceed to Phase 3
-**Fail**: If `channel` or `recipients` missing → return error: `"PLAN validation failed: missing fields: <list>. Specify these before advancing to CREATE."`
+**Gate**: Brief complete with measurable KPIs? → Proceed to Phase 3
 
 ### Phase 3: CREATE
 
@@ -105,36 +98,24 @@ Before starting any phase, load context:
 
 ### Phase 5: LAUNCH
 
-**Required field**: `recipients` — confirmed recipient list or audience segment (must match Phase 2 PLAN)
+1. Execute launch per brief timeline and channel plan
+2. Record launch date, channels activated, and initial distribution metrics
+3. Set up monitoring cadence (daily for first week, then per brief schedule)
+4. Store launch state: `memory_search` then update with launch metadata
 
-**Pre-LAUNCH checklist** (ALL items must pass before proceeding — if any fails, STOP and report which item failed):
-
-- [ ] **Channel confirmed**: distribution channel from PLAN phase is active and accessible
-- [ ] **Recipients confirmed**: `recipients` list/segment is specified and matches PLAN
-- [ ] **Short link embedded**: campaign URL uses a tracked short link (Short.io) — raw URLs are not acceptable
-- [ ] **Timing**: launch falls within Tue-Thu 09:00-11:00 UTC+8 window (optimal engagement). If outside window, flag and require explicit override.
-
-1. Validate all pre-LAUNCH checklist items. If any item fails, return error: `"LAUNCH blocked: <failed item>. Resolve before proceeding."`
-2. Execute launch per brief timeline and channel plan
-3. Record launch date, channels activated, short link URL, and initial distribution metrics
-4. Set up monitoring cadence (daily for first week, then per brief schedule)
-5. Store launch state: `memory_search` then update with launch metadata
-
-**Gate**: Pre-LAUNCH checklist passed, campaign live, and monitoring active? → Proceed to Phase 6
-**Fail**: If any checklist item fails → return error listing the failed items. Do NOT proceed to LAUNCH.
+**Gate**: Campaign live and monitoring active? → Proceed to Phase 6
 
 ### Phase 6: ANALYZE
 
 **Skills**: `weekly-summary` + `campaign-diagnosis`
 
-1. **Retrieve click data**: pull click statistics from the Short.io dashboard (or API) for all campaign short links. Record human clicks (bot-filtered), geographic breakdown, and referrer sources in `marketing/status/weekly-status.md`.
-2. Run `weekly-summary` to capture performance snapshot (include click data from step 1)
-3. Compare actuals vs brief KPIs
-4. If underperforming: run `campaign-diagnosis` for root cause analysis
-5. If A/B test running: evaluate test results and pick winner
-6. Use `campaign-decision-gate` for any mid-flight adjustments
+1. Run `weekly-summary` to capture performance snapshot
+2. Compare actuals vs brief KPIs
+3. If underperforming: run `campaign-diagnosis` for root cause analysis
+4. If A/B test running: evaluate test results and pick winner
+5. Use `campaign-decision-gate` for any mid-flight adjustments
 
-**Gate**: Click data retrieved, performance data collected, and analyzed? → Proceed to Phase 7
+**Gate**: Performance data collected and analyzed? → Proceed to Phase 7
 
 ### Phase 7: LEARN
 
