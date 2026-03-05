@@ -248,6 +248,30 @@ for agent_dir in marketing content analytics; do
   fi
 done
 
+# Seed knowledge files from repo (only if not already present)
+KNOWLEDGE_FILES=(
+  "marketing/memory/brand-and-audience.md:marketing/memory/brand-and-audience.md"
+  "marketing/strategies/campaign-playbook.md:marketing/strategies/campaign-playbook.md"
+  "marketing/performance/baseline-metrics.md:marketing/performance/baseline-metrics.md"
+  "marketing/content/memory/content-style-guide.md:content/memory/content-style-guide.md"
+  "analytics/memory/market-research.md:analytics/memory/market-research.md"
+)
+for entry in "${KNOWLEDGE_FILES[@]}"; do
+  src_rel="${entry%%:*}"
+  dst_rel="${entry##*:}"
+  src="$MARKETING_DIR/$src_rel"
+  dst="$WORKSPACES_DIR/$dst_rel"
+  if [ -f "$src" ] && [ ! -f "$dst" ]; then
+    mkdir -p "$(dirname "$dst")"
+    cp "$src" "$dst"
+    ok "Seeded knowledge: $dst_rel"
+  elif [ -f "$dst" ]; then
+    warn "Knowledge file exists, skipping: $dst_rel"
+  else
+    warn "Source not found, skipping: $src_rel"
+  fi
+done
+
 # Copy custom skill templates
 for skill_dir in campaign-brief content-ab-test campaign-diagnosis structured-brainstorm; do
   src="$MARKETING_DIR/workspaces/marketing/skills/core-marketing/$skill_dir/SKILL.md"

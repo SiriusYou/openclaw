@@ -419,12 +419,27 @@ openclaw agent --agent main \
 |---|------|----------------|---------------|--------|
 | T1 | skill-audit blocks dangerous write | Instruct agent to write dangerous skill | BLOCKED | **Pass** — model safety + plugin loaded |
 | T2 | Legitimate skill write allowed | Write safe skill to evolved/ | Pass + audit log | **Pass** — fixed via `alsoAllow` |
-| T3 | Provider failover | Corrupt primary token, send msg | Fallback delivers | **Pass** |
+| T3 | Provider failover | Corrupt primary token, send msg | Fallback delivers | **Pass** (2026-03-02 live drill) / **Config-only regression** (2026-03-04, see policy below) |
 | T4 | Skill invocation per agent | Chat with each agent using skill | No allowlist block | **Pass** |
 | T5 | memory_search hits | 3 queries across directories | Non-empty + source | **Pass** |
 | T6 | Cron jobs manual trigger | `cron run` each of 4 jobs | All succeed | **Pass** |
 | T7 | Full campaign flow | brief→content→analysis→feedback | One pass, no P0 | **Pass** — skill+subagent+feedback chain verified |
 | T8 | sendPolicy verification | Telegram + CLI path | Both allowed | **Pass** |
+
+### T3 Regression Policy
+
+T3 (provider failover) has two verification levels:
+
+- **Full drill** (initial acceptance): corrupt primary auth profile, send message, verify fallback delivers, restore profile. Required on first setup.
+- **Config-only** (regression): verify 3-provider chain exists in auth profiles and runtime config, confirm no auth/fallback code paths changed. Sufficient when changes are limited to marketing/analytics content.
+
+**Triggers for mandatory live failover drill:**
+- Auth profile changes (new keys, rotated tokens, removed providers)
+- Provider or fallback chain configuration changes
+- OpenClaw version upgrade (especially major versions)
+- Authentication errors observed in production logs
+
+Last full drill: 2026-03-02. Last config-only regression: 2026-03-04 (post-upstream sync).
 
 ### Known Issues (2026-03-03)
 
