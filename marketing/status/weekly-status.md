@@ -42,15 +42,15 @@ _Fill in each Monday. Keep history for trend tracking._
 
 ### Week of 2026-03-05
 
-| #   | Health Indicator       | Status              | Notes                                                                                     |
-| --- | ---------------------- | ------------------- | ----------------------------------------------------------------------------------------- |
-| 1   | Gateway uptime (7d)    | ~95%                | Mac sleep interruptions                                                                   |
-| 2   | Cron success rate (7d) | 5/5 jobs enabled    | Added marketing-gateway-health                                                            |
-| 3   | Daily cost (7d avg)    | ~$0.50              | Subscription-based, minimal API                                                           |
-| 4   | Telegram delivery      | OK                  | @Jiayo_bot active                                                                         |
-| 5   | Evolved skills (total) | 5                   | New: campaign-decision-gate, campaign-retrospective                                       |
-| 6   | Backup freshness       | N/A                 | Launchd job deployed, first backup pending                                                |
-| 7   | Upstream drift         | 0                   | Synced 2026-03-05                                                                         |
-| 8   | Open issues            | P2: evolution dedup | Semantic dedup verified (2/2 recent runs OK); platform idempotency guard not yet in place |
+| #   | Health Indicator       | Status              | Notes                                                                                                                                                                                       |
+| --- | ---------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Gateway uptime (7d)    | ~95%                | Mac sleep interruptions                                                                                                                                                                     |
+| 2   | Cron success rate (7d) | 5/5 jobs enabled    | Added marketing-gateway-health                                                                                                                                                              |
+| 3   | Daily cost (7d avg)    | ~$0.50              | Subscription-based, minimal API                                                                                                                                                             |
+| 4   | Telegram delivery      | OK                  | @Jiayo_bot active                                                                                                                                                                           |
+| 5   | Evolved skills (total) | 5                   | New: campaign-decision-gate, campaign-retrospective                                                                                                                                         |
+| 6   | Backup freshness       | N/A                 | Launchd job deployed, first backup pending                                                                                                                                                  |
+| 7   | Upstream drift         | 0                   | Synced 2026-03-05                                                                                                                                                                           |
+| 8   | Open issues            | P2: evolution dedup | Semantic dedup partially verified: 2/2 recent runs created unique skills; historical duplicate overwrite occurred (Round 2 competitor-monitor); platform idempotency guard not yet in place |
 
 **Action items**: Verify first backup ran, add evolution run idempotency guard
