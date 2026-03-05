@@ -8,7 +8,7 @@
 #
 # Prerequisites:
 #   - Docker Engine 24+ with Compose V2
-#   - Node.js 20+ (for clawhub CLI)
+#   - Node.js 22+ (for clawhub CLI)
 #   - openssl (for token generation)
 #
 # This script:
@@ -373,6 +373,40 @@ for entry in "${SKILL_LINKS[@]}"; do
 done
 
 ok "Cross-workspace skill symlinks done"
+
+# ============================================================================
+# Step 8b: Deploy Backup & Log Rotation Scripts
+# ============================================================================
+step "8b" "Deploying backup and log rotation scripts"
+
+mkdir -p "$CONFIG_DIR/scripts"
+
+# Deploy daily backup script
+BACKUP_SRC="$MARKETING_DIR/scripts/daily-backup.sh"
+BACKUP_DST="$CONFIG_DIR/scripts/daily-backup.sh"
+if [ -f "$BACKUP_SRC" ]; then
+  cp "$BACKUP_SRC" "$BACKUP_DST"
+  chmod +x "$BACKUP_DST"
+  ok "Deployed daily-backup.sh to $BACKUP_DST"
+fi
+
+# Deploy launchd plist for daily backup
+PLIST_SRC="$MARKETING_DIR/scripts/com.openclaw.daily-backup.plist"
+PLIST_DST="$HOME/Library/LaunchAgents/com.openclaw.daily-backup.plist"
+if [ -f "$PLIST_SRC" ]; then
+  if [ -f "$PLIST_DST" ]; then
+    # Unload before replacing to pick up template changes
+    launchctl unload "$PLIST_DST" 2>/dev/null || true
+  fi
+  cp "$PLIST_SRC" "$PLIST_DST"
+  launchctl load "$PLIST_DST" 2>/dev/null || true
+  ok "Installed and loaded launchd job: com.openclaw.daily-backup"
+fi
+
+# Ensure log directory exists for backup logs
+mkdir -p /tmp/openclaw
+
+ok "Backup and log rotation scripts deployed"
 
 # ============================================================================
 # Step 9: Validate .env Before Starting Services
