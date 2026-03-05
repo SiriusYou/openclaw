@@ -11,12 +11,13 @@
 ### Step 1.1: Restart Gateway
 
 Quit and relaunch the **OpenClaw Mac App** to pick up:
+
 - sendPolicy hardening (deny-default + Telegram/CLI allowlist)
 - Auth profile cleanup (removed anthropic:manual + google-antigravity)
 - Phase C plugin fixes (skill-audit, marketing-feedback)
 
 > **Cold restart** (code/plugin file changes): quit and relaunch the Mac App.
-> **Config-only reload** (plugin enable, auth changes): use `openclaw gateway restart`.
+> **Config-only reload** (plugin enable, auth changes): use the Mac App or `scripts/restart-mac.sh`.
 > Do not use `pkill` + manual `gateway run` — the Mac App manages the gateway lifecycle.
 
 ### Step 1.2: Enable Telegram Plugin & Add Bot Token
@@ -28,7 +29,7 @@ Channel providers are extensions that ship disabled by default. Enable and confi
 openclaw plugins enable telegram
 
 # Reload gateway config to load the plugin (config-only change, no cold restart needed)
-openclaw gateway restart
+# Restart via Mac App or: scripts/restart-mac.sh
 
 # Add the Telegram bot token
 openclaw channels add --channel telegram --token "<TELEGRAM_BOT_TOKEN>"
@@ -51,6 +52,7 @@ docker images | grep sandbox
 ```
 
 **Exit criteria:**
+
 - [ ] Telegram probe: `ok`
 - [ ] `openclaw models status` shows exactly 3 profiles (no anthropic:manual, no google-antigravity)
 - [ ] Gateway probe: healthy
@@ -150,6 +152,7 @@ cp ~/.openclaw/agents/main/agent/auth-profiles.json.pre-drill \
 ```
 
 **Exit criteria:**
+
 - [ ] `openclaw models status` shows only 3 valid profiles
 - [ ] Failover drill: message delivered via fallback provider
 - [ ] Cooldown mechanism visible in logs
@@ -213,11 +216,13 @@ ls -la ~/.openclaw/workspaces/analytics/skills/
 For skills NOT found on ClawHub, remove from **both** config files:
 
 **Source** (`marketing/openclaw.json`):
+
 - main.skills array: remove missing slugs from lines 105-107
 - content-writer.skills: remove missing slugs from line 150
 - analyst.skills: remove missing from line 173
 
 **Runtime** (`~/.openclaw/openclaw.json`):
+
 - Same removals, same line positions
 
 Then restart gateway (quit and reopen Mac App).
@@ -240,6 +245,7 @@ openclaw agent --agent analyst \
 ```
 
 **Exit criteria:**
+
 - [ ] Each agent invokes at least 1 skill without allowlist errors
 - [ ] No config references to uninstalled skills remain
 - [ ] Gateway restarted after config changes (if any)
@@ -349,6 +355,7 @@ openclaw cron runs --id <evolution-semimonthly-id> --limit 5
 ```
 
 **Exit criteria:**
+
 - [ ] `openclaw cron list` shows 4 enabled jobs
 - [ ] Each job triggered manually at least once
 - [ ] Cost report delivered to Telegram
@@ -419,6 +426,7 @@ openclaw agent --agent main \
 ```
 
 **Exit criteria:**
+
 - [ ] Campaign brief created via Telegram
 - [ ] Content-writer subagent invoked (check logs)
 - [ ] Analyst provided analysis
@@ -431,16 +439,16 @@ openclaw agent --agent main \
 
 ## Acceptance Test Summary
 
-| # | Test | Command/Action | Pass Criteria | Result |
-|---|------|----------------|---------------|--------|
-| T1 | skill-audit blocks dangerous write | Instruct agent to write dangerous skill | BLOCKED | **Pass** — model safety + plugin loaded |
-| T2 | Legitimate skill write allowed | Write safe skill to evolved/ | Pass + audit log | **Pass** — fixed via `alsoAllow` |
-| T3 | Provider failover | Corrupt primary token, send msg | Fallback delivers | **Pass** (2026-03-02 live drill) / **Config-only regression** (2026-03-04, see policy below) |
-| T4 | Skill invocation per agent | Chat with each agent using skill | No allowlist block | **Pass** |
-| T5 | memory_search hits | 3 queries across directories | Non-empty + source | **Pass** |
-| T6 | Cron jobs manual trigger | `cron run` each of 4 jobs | All succeed | **Pass** |
-| T7 | Full campaign flow | brief→content→analysis→feedback | One pass, no P0 | **Pass** — skill+subagent+feedback chain verified |
-| T8 | sendPolicy verification | Telegram + CLI path | Both allowed | **Pass** |
+| #   | Test                               | Command/Action                          | Pass Criteria      | Result                                                                                       |
+| --- | ---------------------------------- | --------------------------------------- | ------------------ | -------------------------------------------------------------------------------------------- |
+| T1  | skill-audit blocks dangerous write | Instruct agent to write dangerous skill | BLOCKED            | **Pass** — model safety + plugin loaded                                                      |
+| T2  | Legitimate skill write allowed     | Write safe skill to evolved/            | Pass + audit log   | **Pass** — fixed via `alsoAllow`                                                             |
+| T3  | Provider failover                  | Corrupt primary token, send msg         | Fallback delivers  | **Pass** (2026-03-02 live drill) / **Config-only regression** (2026-03-04, see policy below) |
+| T4  | Skill invocation per agent         | Chat with each agent using skill        | No allowlist block | **Pass**                                                                                     |
+| T5  | memory_search hits                 | 3 queries across directories            | Non-empty + source | **Pass**                                                                                     |
+| T6  | Cron jobs manual trigger           | `cron run` each of 4 jobs               | All succeed        | **Pass**                                                                                     |
+| T7  | Full campaign flow                 | brief→content→analysis→feedback         | One pass, no P0    | **Pass** — skill+subagent+feedback chain verified                                            |
+| T8  | sendPolicy verification            | Telegram + CLI path                     | Both allowed       | **Pass**                                                                                     |
 
 ### T3 Regression Policy
 
@@ -450,6 +458,7 @@ T3 (provider failover) has two verification levels:
 - **Config-only** (regression): verify 3-provider chain exists in auth profiles and runtime config, confirm no auth/fallback code paths changed. Sufficient when changes are limited to marketing/analytics content.
 
 **Triggers for mandatory live failover drill:**
+
 - Auth profile changes (new keys, rotated tokens, removed providers)
 - Provider or fallback chain configuration changes
 - OpenClaw version upgrade (especially major versions)
@@ -472,14 +481,16 @@ CLI sessions for the main agent. When main spawned `content-writer` via `session
 spawned session key (`agent:content-writer:spawn:...`) didn't match any allow rule, so the
 gateway blocked it with `send blocked by session policy`.
 Fix: broadened sendPolicy to allow all sessions for configured agents:
+
 - `agent:main:` — main agent CLI, cron, and spawn sessions
 - `agent:content-writer:` — content-writer subagent sessions
 - `agent:analyst:` — analyst subagent sessions
-Evidence (2026-03-04 16:01 UTC): Telegram inbound → `before_agent_start` hook → main agent
-called `sessions_spawn` (succeeded, 83ms) → spawned agent executed 5 `exec` + 2 `read` tool
-calls → `agent_end` feedback fired on both main and spawned sessions.
+  Evidence (2026-03-04 16:01 UTC): Telegram inbound → `before_agent_start` hook → main agent
+  called `sessions_spawn` (succeeded, 83ms) → spawned agent executed 5 `exec` + 2 `read` tool
+  calls → `agent_end` feedback fired on both main and spawned sessions.
 
 **CLI vs Channel Session Tool Access:**
+
 ```
 CLI sessions (openclaw agent --message):
   tools: sessions_spawn only (often blocked by sendPolicy for non-main agents)
@@ -525,8 +536,8 @@ ss -ltnp | grep 18789 2>/dev/null || lsof -i :18789   # port in use?
 
 # Fix
 # Option 1: Relaunch the OpenClaw Mac App (preferred)
-# Option 2: Config-only reload
-openclaw gateway restart
+# Option 2: Config-only reload via scripts/restart-mac.sh
+scripts/restart-mac.sh
 
 # Verify
 openclaw gateway probe
@@ -561,11 +572,11 @@ openclaw cron runs --id <job-id> --limit 1   # verify status=ok
 ```bash
 # Temporarily enable debug logging for diagnostics
 # Edit ~/.openclaw/openclaw.json → "logging": { "level": "debug" }
-openclaw gateway restart
+# Restart via Mac App or: scripts/restart-mac.sh
 
 # After diagnostics, revert to info
 # Edit ~/.openclaw/openclaw.json → "logging": { "level": "info" }
-openclaw gateway restart
+# Restart via Mac App or: scripts/restart-mac.sh
 
 # Debug logs appear in:
 #   ~/.openclaw/logs/gateway.log       (gateway-level, summarized)
@@ -573,13 +584,66 @@ openclaw gateway restart
 #   /tmp/openclaw/openclaw-YYYY-MM-DD.log  (detailed JSON, tool calls, plugin hooks)
 ```
 
+### Live Drill Trigger Conditions
+
+A failover drill SHOULD be performed when:
+
+- Gateway has been offline for >1 hour unexpectedly
+- Auth profile rotation (provider key change)
+- After major upstream sync (>100 commits)
+- Quarterly (minimum frequency)
+
+Record drill results in `marketing/status/failover-log.md`.
+
+### N7 Production Hardening (2026-03-05)
+
+**Cost alerting**: `marketing-cost-daily` cron updated with 3-tier thresholds:
+
+- NORMAL: ≤$15/day
+- WARNING: >$15/day — recommend reviewing model selection
+- CRITICAL: >$20/day — recommend pausing non-core crons
+
+**Gateway health monitoring**: `marketing-gateway-health` cron (every 6h → Telegram)
+
+```bash
+# System ID (environment-specific):
+openclaw cron list --json | jq -r '.jobs[] | select(.name=="marketing-gateway-health") | .id'
+```
+
+**Smoke scripts**:
+
+```bash
+bash marketing/scripts/acceptance-smoke.sh   # T1/T2/T5/T8 checks (13 assertions)
+bash marketing/scripts/cron-smoke.sh          # 5 cron existence + status
+```
+
+**Plugin regression tests**:
+
+```bash
+bunx vitest run test/marketing/   # 31 tests: skill-audit (15) + marketing-feedback (16)
+```
+
+**Backup system**: daily 3:00AM snapshots to `~/.openclaw/backups/YYYY-MM-DD/`
+
+- Scope: openclaw.json, auth-profiles, evolved skills, marketing memory
+- Retention: 30 days
+- Deploy: `setup.sh` step 8b (or manually: `bash marketing/scripts/daily-backup.sh`)
+- Verify: `bash marketing/scripts/daily-backup.sh --dry-run`
+
+**Log rotation**: `bash marketing/scripts/log-rotate.sh` (14-day retention on `/tmp/openclaw/`)
+
+**Status tracking**:
+
+- Weekly health snapshot: `marketing/status/weekly-status.md`
+- Failover drill log: `marketing/status/failover-log.md`
+
 ### Config Change Checklist
 
 When editing `marketing/openclaw.json` (source config):
 
 1. Make the change in source: `marketing/openclaw.json`
 2. Apply the same change to runtime: `~/.openclaw/openclaw.json`
-3. Restart gateway: `openclaw gateway restart`
+3. Restart gateway: via Mac App or `scripts/restart-mac.sh`
 4. Verify: `openclaw gateway probe`
 5. Commit source change to git
 
