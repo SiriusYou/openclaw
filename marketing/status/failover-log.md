@@ -23,7 +23,7 @@ A live drill SHOULD be performed when:
 | ---------- | ------------ | ------------------------ | ------- | ------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | 2026-03-05 | Tech debt B2 | Config restore (dry-run) | PARTIAL | N/A           | Backup only has pre-phase-c snapshot (stale JSON5). Runtime openclaw.json has no current backup. Restore would be lossy. |
 | 2026-03-05 | Tech debt B2 | Auth recovery (dry-run)  | FAIL    | N/A           | auth-profiles.json NOT in backup at all. Recovery requires re-creating all API keys + OAuth tokens.                      |
-| 2026-03-05 | Tech debt B2 | Skill recovery (dry-run) | PASS    | <1m           | Evolved skills backed up via git-based backup. 5 evolved skills present in latest commit.                                |
+| 2026-03-05 | Tech debt B2 | Skill recovery (dry-run) | PASS    | <1m           | Evolved skills in git-based backup. Job active, multiple backup records observed since 2026-03-01.                       |
 
 ### 2026-03-05 Drill Notes
 
