@@ -2,7 +2,7 @@
 # ============================================================================
 # Marketing Agent System — Acceptance Smoke Test
 # ============================================================================
-# Covers: T1 (gateway), T2 (skill write), T5 (6 cron jobs), T8 (config)
+# Covers: T1 (gateway), T2 (skill write), T5 (cron jobs), T8 (config)
 # Dangerous actions (cron trigger, Telegram delivery) require manual confirmation.
 #
 # Usage: bash marketing/scripts/acceptance-smoke.sh
@@ -62,18 +62,29 @@ else
   fail "skill-audit plugin not found in plugin list"
 fi
 
-# --- T5: 6 marketing cron jobs exist and enabled ---
+# --- T5: Marketing cron jobs exist and enabled ---
+# Keep this list in sync with cron-smoke.sh:EXPECTED_CRONS
+EXPECTED_CRONS=(
+  marketing-cost-daily
+  marketing-brief-daily
+  marketing-reflect-weekly
+  marketing-evolution-semimonthly
+  marketing-gateway-health
+  marketing-smoke-daily
+)
+EXPECTED_COUNT=${#EXPECTED_CRONS[@]}
+
 echo "[T5] Marketing cron jobs"
 CRON_JSON=$(openclaw cron list --json 2>&1 || true)
 MARKETING_COUNT=$(echo "$CRON_JSON" | jq '[.jobs[] | select(.name | startswith("marketing-")) | select(.enabled==true)] | length' 2>/dev/null || echo "0")
-if [ "$MARKETING_COUNT" -eq 6 ]; then
-  pass "6 marketing cron jobs enabled"
+if [ "$MARKETING_COUNT" -eq "$EXPECTED_COUNT" ]; then
+  pass "$EXPECTED_COUNT marketing cron jobs enabled"
 else
-  fail "Expected 6 marketing crons, got $MARKETING_COUNT"
+  fail "Expected $EXPECTED_COUNT marketing crons, got $MARKETING_COUNT"
 fi
 
 # --- T5: Each cron job by name ---
-for CRON_NAME in marketing-cost-daily marketing-brief-daily marketing-reflect-weekly marketing-evolution-semimonthly marketing-gateway-health marketing-smoke-daily; do
+for CRON_NAME in "${EXPECTED_CRONS[@]}"; do
   EXISTS=$(echo "$CRON_JSON" | jq --arg n "$CRON_NAME" '[.jobs[] | select(.name==$n)] | length' 2>/dev/null || echo "0")
   if [ "$EXISTS" -ge 1 ]; then
     pass "Cron job exists: $CRON_NAME"
