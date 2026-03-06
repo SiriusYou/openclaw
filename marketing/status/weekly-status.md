@@ -42,15 +42,15 @@ _Fill in each Monday. Keep history for trend tracking._
 
 ### Week of 2026-03-05
 
-| #   | Health Indicator       | Status              | Notes                                                                                                         |
-| --- | ---------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------- |
-| 1   | Gateway uptime (7d)    | ~95%                | Mac sleep interruptions                                                                                       |
-| 2   | Cron success rate (7d) | 6/6 jobs enabled    | Added marketing-smoke-daily                                                                                   |
-| 3   | Daily cost (7d avg)    | ~$0.50              | Subscription-based, minimal API                                                                               |
-| 4   | Telegram delivery      | OK                  | @Jiayo_bot active                                                                                             |
-| 5   | Evolved skills (total) | 5                   | New: campaign-decision-gate, campaign-retrospective                                                           |
-| 6   | Backup freshness       | Active              | Job active, multiple records since 2026-03-01. Git-based (workspace only; config+auth need template redeploy) |
-| 7   | Upstream drift         | 0                   | Synced 2026-03-05                                                                                             |
-| 8   | Open issues            | P2: evolution dedup | Prompt-level mitigation applied (step 1b recency check); platform-level idempotency guard deferred            |
+| #   | Health Indicator       | Status              | Notes                                                                                              |
+| --- | ---------------------- | ------------------- | -------------------------------------------------------------------------------------------------- |
+| 1   | Gateway uptime (7d)    | ~95%                | Mac sleep interruptions                                                                            |
+| 2   | Cron success rate (7d) | 6/6 jobs enabled    | Added marketing-smoke-daily                                                                        |
+| 3   | Daily cost (7d avg)    | ~$0.50              | Subscription-based, minimal API                                                                    |
+| 4   | Telegram delivery      | OK                  | @Jiayo_bot active                                                                                  |
+| 5   | Evolved skills (total) | 5                   | New: campaign-decision-gate, campaign-retrospective                                                |
+| 6   | Backup freshness       | Active              | Template redeployed 2026-03-05; date-based snapshots with config+auth+skills. D3/D4 closed.        |
+| 7   | Upstream drift         | 0                   | Synced 2026-03-05                                                                                  |
+| 8   | Open issues            | P2: evolution dedup | Prompt-level mitigation applied (step 1b recency check); platform-level idempotency guard deferred |
 
-**Action items**: Redeploy backup template to ~/.openclaw/scripts/daily-backup.sh (repo version already includes config+auth); evolution idempotency prompt-level mitigation applied
+**Action items**: ~~Redeploy backup template~~ Done 2026-03-05. CLI upgraded 2026.2.14→2026.3.2; failure-alert enabled on smoke-daily + gateway-health. R3 stability observation in progress.
