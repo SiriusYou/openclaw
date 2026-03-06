@@ -2,7 +2,7 @@
 # ============================================================================
 # Marketing Agent System — Cron Smoke Test
 # ============================================================================
-# Checks: 5 marketing cron jobs exist, enabled, and have recent runs.
+# Checks: 6 marketing cron jobs exist, enabled, and have recent runs.
 #
 # Usage: bash marketing/scripts/cron-smoke.sh [--recent-hours 48]
 # ============================================================================
@@ -31,6 +31,7 @@ EXPECTED_CRONS=(
   "marketing-reflect-weekly"
   "marketing-evolution-semimonthly"
   "marketing-gateway-health"
+  "marketing-smoke-daily"
 )
 
 for CRON_NAME in "${EXPECTED_CRONS[@]}"; do
