@@ -313,7 +313,9 @@ openclaw cron add \
   --announce --channel telegram --to "<TELEGRAM_CHAT_ID>" \
   --message "Semimonthly skill evolution cycle. You MUST complete ALL steps:
 
-1. INVENTORY: List existing skills in skills/evolved/ to avoid duplicates. Also note the core skills: campaign-brief, content-ab-test, campaign-diagnosis, structured-brainstorm. Also note ClawHub skills: self-evolution, evolution-drift-detector, marketing-strategy-pmm.
+1. INVENTORY: List existing skills in skills/evolved/ to avoid duplicates. Also note the core skills: campaign-brief, content-ab-test, campaign-diagnosis, structured-brainstorm, campaign-lifecycle. Also note ClawHub skills: self-evolution, evolution-drift-detector, marketing-strategy-pmm.
+
+1b. RECENCY CHECK: Examine the modification timestamps of files in skills/evolved/. If any skill was created or modified in the last 10 minutes, SKIP this entire cycle and REPORT: 'Skipped — recent evolution run detected at <timestamp>. Avoiding duplicate creation.' Then stop.
 
 2. ANALYZE: Run memory_search('campaign lessons learned') and memory_search('skill gaps') to identify what's missing.
 
@@ -335,7 +337,7 @@ openclaw cron list --json | jq '.jobs[] | select(.name=="marketing-evolution-sem
 
 ```bash
 openclaw cron list
-# Expected: 5 enabled jobs (cost-daily, brief-daily, reflect-weekly, evolution-semimonthly, gateway-health)
+# Expected: 6 enabled jobs (cost-daily, brief-daily, reflect-weekly, evolution-semimonthly, gateway-health, smoke-daily)
 ```
 
 ### Step 5.3: Manual Trigger Test (T6)
@@ -346,17 +348,21 @@ openclaw cron run <cost-daily-id>
 openclaw cron run <brief-daily-id>
 openclaw cron run <reflect-weekly-id>
 openclaw cron run <evolution-semimonthly-id>
+openclaw cron run <gateway-health-id>
+openclaw cron run <smoke-daily-id>
 
 # Check execution results:
 openclaw cron runs --id <cost-daily-id> --limit 5
 openclaw cron runs --id <brief-daily-id> --limit 5
 openclaw cron runs --id <reflect-weekly-id> --limit 5
 openclaw cron runs --id <evolution-semimonthly-id> --limit 5
+openclaw cron runs --id <gateway-health-id> --limit 5
+openclaw cron runs --id <smoke-daily-id> --limit 5
 ```
 
 **Exit criteria:**
 
-- [ ] `openclaw cron list` shows 4 enabled jobs
+- [ ] `openclaw cron list` shows 6 enabled jobs
 - [ ] Each job triggered manually at least once
 - [ ] Cost report delivered to Telegram
 - [ ] Morning brief + weekly reflect ran without delivery (--no-deliver)
@@ -446,7 +452,7 @@ openclaw agent --agent main \
 | T3  | Provider failover                  | Corrupt primary token, send msg         | Fallback delivers  | **Pass** (2026-03-02 live drill) / **Config-only regression** (2026-03-04, see policy below) |
 | T4  | Skill invocation per agent         | Chat with each agent using skill        | No allowlist block | **Pass**                                                                                     |
 | T5  | memory_search hits                 | 3 queries across directories            | Non-empty + source | **Pass**                                                                                     |
-| T6  | Cron jobs manual trigger           | `cron run` each of 4 jobs               | All succeed        | **Pass**                                                                                     |
+| T6  | Cron jobs manual trigger           | `cron run` each of 6 jobs               | All succeed        | **Pass**                                                                                     |
 | T7  | Full campaign flow                 | brief→content→analysis→feedback         | One pass, no P0    | **Pass** — skill+subagent+feedback chain verified                                            |
 | T8  | sendPolicy verification            | Telegram + CLI path                     | Both allowed       | **Pass**                                                                                     |
 
@@ -614,7 +620,7 @@ openclaw cron list --json | jq -r '.jobs[] | select(.name=="marketing-gateway-he
 
 ```bash
 bash marketing/scripts/acceptance-smoke.sh   # T1/T2/T5/T8 checks (13 assertions)
-bash marketing/scripts/cron-smoke.sh          # 5 cron existence + status
+bash marketing/scripts/cron-smoke.sh          # 6 cron existence + status
 ```
 
 **Plugin regression tests**:
