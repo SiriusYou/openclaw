@@ -22,6 +22,13 @@ echo "=== Marketing Cron Smoke Test ==="
 echo "  Recent window: ${RECENT_HOURS}h"
 echo ""
 
+# Pre-flight: verify gateway is reachable before querying cron API
+if ! openclaw gateway probe >/dev/null 2>&1; then
+  echo "ERROR: Gateway is unreachable. Start the OpenClaw Mac App or run scripts/restart-mac.sh."
+  echo "       Cannot query cron jobs without a running gateway."
+  exit 1
+fi
+
 # Fetch cron list once
 CRON_JSON=$(openclaw cron list --json 2>&1)
 

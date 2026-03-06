@@ -619,7 +619,7 @@ openclaw cron list --json | jq -r '.jobs[] | select(.name=="marketing-gateway-he
 **Smoke scripts**:
 
 ```bash
-bash marketing/scripts/acceptance-smoke.sh   # T1/T2/T5/T8 checks (13 assertions)
+bash marketing/scripts/acceptance-smoke.sh   # T1/T2/T5/T8 checks (14 assertions)
 bash marketing/scripts/cron-smoke.sh          # 6 cron existence + status
 ```
 
