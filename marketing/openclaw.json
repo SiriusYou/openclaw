@@ -4,246 +4,225 @@
   // ==========================================================================
 
   // --- Gateway Security ---
-  gateway: {
-    mode: "local",
-    bind: "loopback",
-    port: 18789,
-    trustedProxies: [],
+  "gateway": {
+    "mode": "local",
+    "bind": "loopback",
+    "port": 18789,
+    "trustedProxies": []
   },
 
   // --- Auth: multi-account failover ---
   // When one account's quota runs out, auto-switch to the next profile,
   // then fall back to the next provider in the model fallback chain.
-  auth: {
-    cooldowns: {
-      billingBackoffHours: 1,      // retry exhausted account after 1h
-      billingMaxHours: 12,         // max backoff cap
-    },
+  "auth": {
+    "cooldowns": {
+      "billingBackoffHours": 1, // retry exhausted account after 1h
+      "billingMaxHours": 12 // max backoff cap
+    }
   },
 
   // --- Logging & Diagnostics ---
-  logging: {
-    level: "info",
-    redactSensitive: "tools",
+  "logging": {
+    "level": "info",
+    "redactSensitive": "tools"
   },
-  diagnostics: {
-    enabled: true,
-    flags: ["gateway.*", "session.*", "webhook.*", "agent.*"],
+  "diagnostics": {
+    "enabled": true,
+    "flags": ["gateway.*", "session.*", "webhook.*", "agent.*"]
   },
 
   // --- Memory ---
   // NOTE: Paths use __WORKSPACE_ROOT__ placeholder, resolved by setup.sh
-  memory: {
-    backend: "builtin",
-    citations: "auto",
-    qmd: {
-      paths: [
-        { path: "__WORKSPACE_ROOT__/marketing/memory/", name: "Marketing Knowledge" },
-        { path: "__WORKSPACE_ROOT__/marketing/strategies/", name: "Campaign Strategies" },
-        { path: "__WORKSPACE_ROOT__/marketing/performance/", name: "Performance Data" },
-        { path: "__WORKSPACE_ROOT__/analytics/memory/", name: "Market Research" },
-        { path: "__WORKSPACE_ROOT__/content/memory/", name: "Content Guidelines" },
+  "memory": {
+    "backend": "builtin",
+    "citations": "auto",
+    "qmd": {
+      "paths": [
+        { "path": "__WORKSPACE_ROOT__/marketing/memory/", "name": "Marketing Knowledge" },
+        { "path": "__WORKSPACE_ROOT__/marketing/strategies/", "name": "Campaign Strategies" },
+        { "path": "__WORKSPACE_ROOT__/marketing/performance/", "name": "Performance Data" },
+        { "path": "__WORKSPACE_ROOT__/analytics/memory/", "name": "Market Research" },
+        { "path": "__WORKSPACE_ROOT__/content/memory/", "name": "Content Guidelines" }
       ],
-      sessions: {
-        enabled: true,
-        retentionDays: 180,
+      "sessions": {
+        "enabled": true,
+        "retentionDays": 180
       },
-      update: {
-        interval: "5m",
-        embedInterval: "30m",
+      "update": {
+        "interval": "5m",
+        "embedInterval": "30m"
       },
-      limits: {
-        maxResults: 10,
-        maxSnippetChars: 500,
-      },
-    },
+      "limits": {
+        "maxResults": 10,
+        "maxSnippetChars": 500
+      }
+    }
   },
 
   // --- Agents ---
-  agents: {
-    defaults: {
+  "agents": {
+    "defaults": {
       // Primary: OpenAI subscription → Fallbacks: Google (free tier) → OpenRouter (pay-per-use)
       // Three-tier provider architecture: openai-codex, google, openrouter
-      model: {
-        primary: "openai-codex/gpt-5.3-codex",
-        fallbacks: [
-          "google/gemini-3-pro-preview",
-          "openrouter/auto",
-        ],
+      "model": {
+        "primary": "openai-codex/gpt-5.3-codex",
+        "fallbacks": ["google/gemini-3-pro-preview", "openrouter/auto"]
       },
       // All agents sandboxed by default — tool execution in Docker containers
-      sandbox: {
-        mode: "all",
-        workspaceAccess: "rw",
-        docker: {
-          network: "none",        // no internet access
-          readOnlyRoot: true,     // read-only filesystem
-          capDrop: ["ALL"],       // all capabilities removed
-        },
-      },
+      "sandbox": {
+        "mode": "all",
+        "workspaceAccess": "rw",
+        "docker": {
+          "network": "none", // no internet access
+          "readOnlyRoot": true, // read-only filesystem
+          "capDrop": ["ALL"] // all capabilities removed
+        }
+      }
     },
 
-    list: [
+    "list": [
       // --- Marketing Orchestrator ---
       // NOTE: id MUST be "main" — OpenClaw has a bug where session path
       // validation always checks against agents/main/sessions/ regardless
       // of the actual agent ID. Using any other ID causes:
       //   "Session file path must be within sessions directory"
       {
-        id: "main",
-        default: true,
-        name: "Marketing Orchestrator",
-        workspace: "__WORKSPACE_ROOT__/marketing",
-        model: {
-          primary: "openai-codex/gpt-5.3-codex",
-          fallbacks: [
-            "google/gemini-3-pro-preview",
-            "openrouter/auto",
-          ],
+        "id": "main",
+        "default": true,
+        "name": "Marketing Orchestrator",
+        "workspace": "__WORKSPACE_ROOT__/marketing",
+        "model": {
+          "primary": "openai-codex/gpt-5.3-codex",
+          "fallbacks": ["google/gemini-3-pro-preview", "openrouter/auto"]
         },
-        skills: [
+        "skills": [
           "clawhub",
           "campaign-brief",
           "content-ab-test",
           "campaign-diagnosis",
-          "structured-brainstorm",
+          "structured-brainstorm"
         ],
-        subagents: {
-          allowAgents: ["content-writer", "analyst"],
-          model: {
-            primary: "google/gemini-3-flash-preview",
-            fallbacks: [
-              "openai-codex/gpt-5.3-codex",
-              "openrouter/auto",
-            ],
-          },
+        "subagents": {
+          "allowAgents": ["content-writer", "analyst"],
+          "model": {
+            "primary": "google/gemini-3-flash-preview",
+            "fallbacks": ["openai-codex/gpt-5.3-codex", "openrouter/auto"]
+          }
         },
-        tools: {
-          profile: "full",
-          alsoAllow: [
-            "memory_search",
-            "memory_get",
-            "sessions_spawn",
-            "clawhub",
-          ],
+        "tools": {
+          "profile": "full",
+          "alsoAllow": ["memory_search", "memory_get", "sessions_spawn", "clawhub"]
         },
-        memorySearch: { enabled: true },
-        groupChat: {
-          mentionPatterns: ["@orchestrator", "@marketing"],
-        },
+        "memorySearch": { "enabled": true },
+        "groupChat": {
+          "mentionPatterns": ["@orchestrator", "@marketing"]
+        }
       },
 
       // --- Content Writer ---
       {
-        id: "content-writer",
-        name: "Content Writer",
-        workspace: "__WORKSPACE_ROOT__/content",
-        model: {
-          primary: "openai-codex/gpt-5.3-codex",
-          fallbacks: [
-            "google/gemini-3-pro-preview",
-            "openrouter/auto",
-          ],
+        "id": "content-writer",
+        "name": "Content Writer",
+        "workspace": "__WORKSPACE_ROOT__/content",
+        "model": {
+          "primary": "openai-codex/gpt-5.3-codex",
+          "fallbacks": ["google/gemini-3-pro-preview", "openrouter/auto"]
         },
-        skills: ["claw1-content-calendar"],
-        tools: {
-          profile: "full",
-          alsoAllow: [
-            "memory_search",
-            "memory_get",
-          ],
+        "skills": ["claw1-content-calendar"],
+        "tools": {
+          "profile": "full",
+          "alsoAllow": ["memory_search", "memory_get"]
         },
-        memorySearch: { enabled: true },
+        "memorySearch": { "enabled": true }
       },
 
       // --- Analyst ---
       {
-        id: "analyst",
-        name: "Marketing Analyst",
-        workspace: "__WORKSPACE_ROOT__/analytics",
-        model: {
-          primary: "google/gemini-3-pro-preview",
-          fallbacks: [
-            "openrouter/auto",
-            "openai-codex/gpt-5.3-codex",
-          ],
+        "id": "analyst",
+        "name": "Marketing Analyst",
+        "workspace": "__WORKSPACE_ROOT__/analytics",
+        "model": {
+          "primary": "google/gemini-3-pro-preview",
+          "fallbacks": ["openrouter/auto", "openai-codex/gpt-5.3-codex"]
         },
-        skills: ["check-analytics"],
-        tools: {
-          profile: "full",
-          alsoAllow: [
+        "skills": ["check-analytics"],
+        "tools": {
+          "profile": "full",
+          "alsoAllow": [
             "memory_search",
             "memory_get",
             "browser_screenshot",
             "browser_navigate",
-            "browser_snapshot",
-          ],
+            "browser_snapshot"
+          ]
         },
-        memorySearch: { enabled: true },
-        sandbox: {
-          mode: "all",
-          workspaceAccess: "ro",
-          docker: {
-            image: "openclaw-sandbox-browser:bookworm-slim",
+        "memorySearch": { "enabled": true },
+        "sandbox": {
+          "mode": "all",
+          "workspaceAccess": "ro",
+          "docker": {
+            "image": "openclaw-sandbox-browser:bookworm-slim"
           },
-          browser: {
-            enabled: true,
-            headless: true,
-          },
-        },
-      },
-    ],
+          "browser": {
+            "enabled": true,
+            "headless": true
+          }
+        }
+      }
+    ]
   },
 
   // --- Channel Bindings ---
-  bindings: [
+  "bindings": [
     {
-      agentId: "main",
-      match: { channel: "telegram", accountId: "*" },
+      "agentId": "main",
+      "match": { "channel": "telegram", "accountId": "*" }
     },
+    // Slack binding (deferred — N8 postponed, no Slack App credentials configured)
+    // Kept as placeholder; remove or activate when Slack channel is added.
     {
-      agentId: "main",
-      match: { channel: "slack", accountId: "*" },
-    },
+      "agentId": "main",
+      "match": { "channel": "slack", "accountId": "*" }
+    }
   ],
 
   // --- Session Send Policy ---
   // default: "deny" with explicit allowlist for Telegram + CLI testing
   // schema: src/config/zod-schema.allowdeny.ts:22-33 → { action, match }
-  session: {
-    sendPolicy: {
-      default: "deny",
+  "session": {
+    "sendPolicy": {
+      "default": "deny",
       // NOTE: rawKeyPrefix rules lack channel constraint because sessions_spawn
       // is evaluated at the WS agent endpoint (no channel attribute). Adding
       // channel: "telegram" would re-break subagent delegation. When enabling
       // new channels (e.g. Slack), review these rules to avoid unintended sends.
-      rules: [
-        { action: "allow", match: { channel: "telegram" } },
+      "rules": [
+        { "action": "allow", "match": { "channel": "telegram" } },
         // main agent: CLI, cron, and spawn sessions
-        { action: "allow", match: { rawKeyPrefix: "agent:main:" } },
+        { "action": "allow", "match": { "rawKeyPrefix": "agent:main:" } },
         // content-writer subagent sessions (spawned by main)
-        { action: "allow", match: { rawKeyPrefix: "agent:content-writer:" } },
+        { "action": "allow", "match": { "rawKeyPrefix": "agent:content-writer:" } },
         // analyst subagent sessions (spawned by main, cron)
-        { action: "allow", match: { rawKeyPrefix: "agent:analyst:" } },
-      ],
-    },
+        { "action": "allow", "match": { "rawKeyPrefix": "agent:analyst:" } }
+      ]
+    }
   },
 
   // --- Plugins ---
   // ~/.openclaw/extensions/ is auto-discovered, no need for plugins.load.paths
   // Channel plugins (telegram, discord, etc.) must be explicitly enabled here.
   // Enable via CLI: openclaw plugins enable <name>
-  plugins: {
-    enabled: true,
-    entries: {
-      telegram: { enabled: true },
-    },
+  "plugins": {
+    "enabled": true,
+    "entries": {
+      "telegram": { "enabled": true }
+    }
   },
 
   // --- Cron ---
   // Cron jobs are managed via the API/CLI, not in config.
   // Use: openclaw cron add ... to create jobs after gateway starts.
-  cron: {
-    enabled: true,
-  },
+  "cron": {
+    "enabled": true
+  }
 }
