@@ -273,7 +273,7 @@ for entry in "${KNOWLEDGE_FILES[@]}"; do
 done
 
 # Copy custom skill templates
-for skill_dir in campaign-brief content-ab-test campaign-diagnosis structured-brainstorm; do
+for skill_dir in campaign-brief content-ab-test campaign-diagnosis structured-brainstorm campaign-lifecycle; do
   src="$MARKETING_DIR/workspaces/marketing/skills/core-marketing/$skill_dir/SKILL.md"
   dst="$WORKSPACES_DIR/marketing/skills/core-marketing/$skill_dir/SKILL.md"
   if [ -f "$src" ] && [ ! -f "$dst" ]; then
