@@ -100,7 +100,12 @@
           "campaign-brief",
           "content-ab-test",
           "campaign-diagnosis",
-          "structured-brainstorm"
+          "structured-brainstorm",
+          "campaign-lifecycle",
+          "content-repurposing",
+          "campaign-decision-gate",
+          "weekly-summary",
+          "campaign-retrospective"
         ],
         "subagents": {
           "allowAgents": ["content-writer", "analyst"],
