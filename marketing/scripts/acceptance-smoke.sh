@@ -10,6 +10,10 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=cron-jobs.conf
+source "$SCRIPT_DIR/cron-jobs.conf"
+
 PASS=0
 FAIL=0
 SKIP=0
@@ -63,28 +67,18 @@ else
 fi
 
 # --- T5: Marketing cron jobs exist and enabled ---
-# Keep this list in sync with cron-smoke.sh:EXPECTED_CRONS
-EXPECTED_CRONS=(
-  marketing-cost-daily
-  marketing-brief-daily
-  marketing-reflect-weekly
-  marketing-evolution-semimonthly
-  marketing-gateway-health
-  marketing-smoke-daily
-)
-EXPECTED_COUNT=${#EXPECTED_CRONS[@]}
-
+# Job list sourced from cron-jobs.conf (single source of truth)
 echo "[T5] Marketing cron jobs"
-CRON_JSON=$(openclaw cron list --json 2>&1 || true)
+CRON_JSON=$(openclaw cron list --json 2>/dev/null | sed -n '/^{/,$p' || true)
 MARKETING_COUNT=$(echo "$CRON_JSON" | jq '[.jobs[] | select(.name | startswith("marketing-")) | select(.enabled==true)] | length' 2>/dev/null || echo "0")
-if [ "$MARKETING_COUNT" -eq "$EXPECTED_COUNT" ]; then
-  pass "$EXPECTED_COUNT marketing cron jobs enabled"
+if [ "$MARKETING_COUNT" -eq "$MARKETING_CRON_COUNT" ]; then
+  pass "$MARKETING_CRON_COUNT marketing cron jobs enabled"
 else
-  fail "Expected $EXPECTED_COUNT marketing crons, got $MARKETING_COUNT"
+  fail "Expected $MARKETING_CRON_COUNT marketing crons, got $MARKETING_COUNT"
 fi
 
 # --- T5: Each cron job by name ---
-for CRON_NAME in "${EXPECTED_CRONS[@]}"; do
+for CRON_NAME in "${MARKETING_CRON_NAMES[@]}"; do
   EXISTS=$(echo "$CRON_JSON" | jq --arg n "$CRON_NAME" '[.jobs[] | select(.name==$n)] | length' 2>/dev/null || echo "0")
   if [ "$EXISTS" -ge 1 ]; then
     pass "Cron job exists: $CRON_NAME"
