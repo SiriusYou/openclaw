@@ -88,3 +88,22 @@ _Fill in each Monday. Keep history for trend tracking._
 | 8   | Open issues            | D9 (groupPolicy) | Low priority (DM unaffected)                     |
 
 **R4 Pilot Drill Result**: 7/7 phases complete (IDEATE-PLAN-CREATE-GATE-LAUNCH-ANALYZE-LEARN). Campaign: "OpenClaw: Under the Hood". Gate: GO. Lessons: 3 extracted (timing, friction, analytics). T7.1-T7.5 all pass.
+
+---
+
+### Week of 2026-03-09
+
+| #   | Health Indicator       | Status                                      | Notes                                                                                    |
+| --- | ---------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| 1   | Gateway uptime (7d)    | ~95%                                        | Mac sleep interruptions                                                                  |
+| 2   | Cron success rate (7d) | 4/6 OK                                      | 2 FAIL (cost-daily, smoke-daily) from manual trigger errors; awaiting next scheduled run |
+| 3   | Daily cost (7d avg)    | ~$0.00                                      | NORMAL; subscription-based                                                               |
+| 4   | Telegram delivery      | OK                                          | @Jiayo_bot active                                                                        |
+| 5   | Evolved skills (total) | 5                                           | No new this week                                                                         |
+| 6   | Backup freshness       | Active                                      | Daily 3AM snapshots (30-day retention)                                                   |
+| 7   | Upstream drift         | behind=0, ahead=52                          | Synced 2026-03-09; long branch risk (D2 planned: ahead ≤20 by 03-22)                     |
+| 8   | Open issues            | D1 mitigated, D2 planned, D9 open, D11 open | D9=groupPolicy (low), D11=ephemeral audit evidence (low)                                 |
+
+**CLI**: v2026.3.8. **Tests**: 31/31. **R4**: Complete (7/7 phases, 3 lessons). **Next**: D0-D3 calibration → R5.
+
+**Action items**: D0 status rebaseline (this entry). D1 memory grounding. D2 branch merge PR-A. D3 link tracking.

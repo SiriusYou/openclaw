@@ -6,6 +6,119 @@
 
 ---
 
+## Monday Status Update Checklist (周一状态更新必须项)
+
+Run these checks every Monday and record results in `marketing/status/weekly-status.md`.
+
+### 1. Git Drift
+
+```bash
+# Fetch remotes (upstream may not exist in all clones — skip if missing)
+git fetch origin
+git fetch upstream 2>/dev/null || echo "WARN: 'upstream' remote not found — skip upstream drift check"
+git rev-list --left-right --count origin/main...HEAD
+# Output: behind=N ahead=N
+```
+
+### 2. Cron Health (6/6)
+
+```bash
+bash marketing/scripts/cron-health-check.sh
+# Exit 0 = all 6 jobs healthy; exit 1 = at least one failure
+# Checks BOTH recency (per-job staleness window) AND last run status (error = FAIL)
+# Per-job windows: daily ≤48h, weekly ≤8d, semimonthly ≤20d, gateway-health ≤12h
+```
+
+### 3. Tests
+
+```bash
+bunx vitest run test/marketing/
+# Record: N/N pass
+```
+
+### 4. CLI + Gateway Version
+
+```bash
+openclaw --version
+# Record version in weekly-status
+```
+
+### 5. Open Issues
+
+Review open items (D1-D11) and record current status in weekly-status row 8.
+
+### 6. Failover Trigger Conditions
+
+> **Note**: This Monday checklist is the team-sharable control point for status updates, replacing the per-machine `~/.claude/hooks/openclaw-sync-check.sh` hook which only runs locally.
+
+Check whether any of these occurred since last update:
+
+- Auth profile changes (key rotation, new/removed providers)
+- OpenClaw version upgrade
+- Authentication errors in `~/.openclaw/logs/gateway.err.log`
+
+If any occurred, schedule a live failover drill per the "Live Drill Trigger Conditions" section below.
+
+---
+
+## Link Tracking
+
+Short links with click tracking are required for all campaign distribution. This enables the ANALYZE phase (Phase 6) of campaign-lifecycle to measure engagement.
+
+### Service: Short.io
+
+**Why Short.io over Dub.co**: Short.io free tier provides 1,000 links/month (vs Dub.co's 25), includes bot/preview filtering, and offers full REST API access. Both provide click tracking with timestamps.
+
+**Account**: _TODO: create account at https://short.io and record credentials here_
+
+### Creating Campaign Links
+
+1. Log in to Short.io dashboard
+2. Create a new link:
+   - **Original URL**: the campaign destination (blog post, landing page, etc.)
+   - **Slug**: use pattern `oc-<campaign-short-name>-<variant>` (e.g. `oc-underthehood-tw` for Twitter variant)
+   - **Tags**: add campaign name tag for grouping
+3. Via API (programmatic):
+
+```bash
+curl -X POST https://api.short.io/links \
+  -H "Authorization: <API_KEY>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "domain": "<YOUR_SHORT_DOMAIN>",
+    "originalURL": "https://example.com/campaign-page",
+    "path": "oc-campaign-variant",
+    "tags": ["campaign-name"]
+  }'
+```
+
+### Reading Click Data
+
+1. **Dashboard**: Short.io dashboard → Links → click the link → view click timeline, geographic breakdown, referrer data
+2. **API**:
+
+```bash
+# Get click statistics for a link
+curl "https://api-v2.short.io/statistics/link/<LINK_ID>?period=week" \
+  -H "Authorization: <API_KEY>"
+```
+
+3. Record click data in `marketing/status/weekly-status.md` during the Monday Status Update Checklist
+
+### Bot/Preview Filtering
+
+Short.io includes bot and link-preview filtering by default. Clicks from:
+
+- Social media link previews (Facebook, Twitter, Slack, Telegram crawlers)
+- Search engine bots
+- Known automated agents
+
+are filtered out of click counts automatically. The dashboard shows both "total" and "human" clicks. Use **human clicks** for campaign KPIs.
+
+> If bot filtering is ever unavailable or unreliable, fall back to reporting **unfiltered** total clicks and note "unfiltered" in the weekly-status entry.
+
+---
+
 ## Day 1: Gateway Restart & Startup Verification
 
 ### Step 1.1: Restart Gateway

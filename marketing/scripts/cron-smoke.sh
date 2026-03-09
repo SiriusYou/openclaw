@@ -9,6 +9,10 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=cron-jobs.conf
+source "$SCRIPT_DIR/cron-jobs.conf"
+
 RECENT_HOURS="${1:-48}"
 PASS=0
 FAIL=0
@@ -29,19 +33,10 @@ if ! openclaw gateway probe >/dev/null 2>&1; then
   exit 1
 fi
 
-# Fetch cron list once
-CRON_JSON=$(openclaw cron list --json 2>&1)
+# Fetch cron list once (strip non-JSON prefix from Doctor warnings)
+CRON_JSON=$(openclaw cron list --json 2>/dev/null | sed -n '/^{/,$p')
 
-EXPECTED_CRONS=(
-  "marketing-cost-daily"
-  "marketing-brief-daily"
-  "marketing-reflect-weekly"
-  "marketing-evolution-semimonthly"
-  "marketing-gateway-health"
-  "marketing-smoke-daily"
-)
-
-for CRON_NAME in "${EXPECTED_CRONS[@]}"; do
+for CRON_NAME in "${MARKETING_CRON_NAMES[@]}"; do
   echo "[$CRON_NAME]"
 
   # Check existence
