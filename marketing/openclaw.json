@@ -121,7 +121,12 @@
         "memorySearch": { "enabled": true },
         "groupChat": {
           "mentionPatterns": ["@orchestrator", "@marketing"]
-        }
+        },
+        // Sandbox OFF for main agent — Docker sandbox (network: none) blocks
+        // LLM API calls in cron context. Per-context sandbox not supported,
+        // so main agent needs sandbox off for cron to work. Acceptable for
+        // single-user local deployment; revisit if multi-user.
+        "sandbox": { "mode": "off" }
       },
 
       // --- Content Writer ---
@@ -228,6 +233,12 @@
   // Cron jobs are managed via the API/CLI, not in config.
   // Use: openclaw cron add ... to create jobs after gateway starts.
   "cron": {
-    "enabled": true
+    "enabled": true,
+    // Lane concurrency > 1 to mitigate observed cron lane blocking:
+    // when a job times out via Promise.race, the underlying task appears to
+    // retain the lane=cron slot (observed in gateway-cli, not confirmed upstream).
+    // With concurrency=1, timed-out tasks can block subsequent jobs.
+    // Setting to 3 provides headroom for stuck slots.
+    "maxConcurrentRuns": 3
   }
 }

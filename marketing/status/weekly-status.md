@@ -93,17 +93,30 @@ _Fill in each Monday. Keep history for trend tracking._
 
 ### Week of 2026-03-09
 
-| #   | Health Indicator       | Status                                      | Notes                                                                                    |
-| --- | ---------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| 1   | Gateway uptime (7d)    | ~95%                                        | Mac sleep interruptions                                                                  |
-| 2   | Cron success rate (7d) | 4/6 OK                                      | 2 FAIL (cost-daily, smoke-daily) from manual trigger errors; awaiting next scheduled run |
-| 3   | Daily cost (7d avg)    | ~$0.00                                      | NORMAL; subscription-based                                                               |
-| 4   | Telegram delivery      | OK                                          | @Jiayo_bot active                                                                        |
-| 5   | Evolved skills (total) | 5                                           | No new this week                                                                         |
-| 6   | Backup freshness       | Active                                      | Daily 3AM snapshots (30-day retention)                                                   |
-| 7   | Upstream drift         | behind=0, ahead=52                          | Synced 2026-03-09; long branch risk (D2 planned: ahead ≤20 by 03-22)                     |
-| 8   | Open issues            | D1 mitigated, D2 planned, D9 open, D11 open | D9=groupPolicy (low), D11=ephemeral audit evidence (low)                                 |
+| #   | Health Indicator       | Status                                      | Notes                                                                |
+| --- | ---------------------- | ------------------------------------------- | -------------------------------------------------------------------- |
+| 1   | Gateway uptime (7d)    | ~95%                                        | Mac sleep interruptions                                              |
+| 2   | Cron success rate (7d) | 6/6 OK (validated 2026-03-10 08:16 UTC+8)   | sandbox off + maxConcurrentRuns: 3 applied; monitor ongoing          |
+| 3   | Daily cost (7d avg)    | ~$0.00                                      | NORMAL; subscription-based                                           |
+| 4   | Telegram delivery      | OK                                          | @Jiayo_bot active                                                    |
+| 5   | Evolved skills (total) | 5                                           | No new this week                                                     |
+| 6   | Backup freshness       | Active                                      | Daily 3AM snapshots (30-day retention)                               |
+| 7   | Upstream drift         | behind=0, ahead=53                          | Synced 2026-03-10; long branch risk (D2 planned: ahead ≤20 by 03-22) |
+| 8   | Open issues            | D1 mitigated, D2 planned, D9 open, D11 open | D9=groupPolicy (low), D11=ephemeral audit evidence (low)             |
 
 **CLI**: v2026.3.8. **Tests**: 31/31. **R4**: Complete (7/7 phases, 3 lessons). **Next**: D0-D3 calibration → R5.
 
-**Action items**: D0 status rebaseline (this entry). D1 memory grounding. D2 branch merge PR-A. D3 link tracking.
+**T9 Negative Test Results** (2026-03-09):
+
+- Phase 2 missing `channel`+`recipients`: PASS — agent stopped before Phase 3, requested missing fields. `evidence_ref: telegram-dm-session-2026-03-09-t9-phase2`
+- Phase 5 missing `recipients`: PASS — agent refused to launch, cited missing recipients. `evidence_ref: telegram-dm-session-2026-03-09-t9-phase5`
+
+**Calibration Status**:
+
+- D0a (implementation): PASS — weekly-status, cron-health-check.sh, RUNBOOK checklist all delivered
+- D0b (runtime): PASS (at validation 2026-03-10 08:16 UTC+8). Fix: sandbox off + maxConcurrentRuns: 3; suspected cause: Docker network isolation + cron lane blocking on timeout
+- D1 (memory grounding): PASS — 3 MEMORY.md files grounded with ≥3 actionable items each
+- D2 PR-A: Created (SiriusYou/openclaw#1) — awaiting merge
+- D3 (link tracking): In Progress — SKILL.md hardened (T9 PASS), RUNBOOK updated, Short.io account pending (user action)
+
+**Action items**: ~~D0a~~ Done. D0b: validated 2026-03-10 (monitor ongoing). ~~D1~~ Done. D2: merge PR-A. D3: create Short.io account + test click recording.
