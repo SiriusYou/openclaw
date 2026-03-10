@@ -65,7 +65,7 @@
       // Primary: OpenAI subscription → Fallbacks: Google (free tier) → OpenRouter (pay-per-use)
       // Three-tier provider architecture: openai-codex, google, openrouter
       "model": {
-        "primary": "openai-codex/gpt-5.3-codex",
+        "primary": "openai-codex/gpt-5.4",
         "fallbacks": ["google/gemini-3-pro-preview", "openrouter/auto"]
       },
       // All agents sandboxed by default — tool execution in Docker containers
@@ -92,7 +92,7 @@
         "name": "Marketing Orchestrator",
         "workspace": "__WORKSPACE_ROOT__/marketing",
         "model": {
-          "primary": "openai-codex/gpt-5.3-codex",
+          "primary": "openai-codex/gpt-5.4",
           "fallbacks": ["google/gemini-3-pro-preview", "openrouter/auto"]
         },
         "skills": [
@@ -111,7 +111,7 @@
           "allowAgents": ["content-writer", "analyst"],
           "model": {
             "primary": "google/gemini-3-flash-preview",
-            "fallbacks": ["openai-codex/gpt-5.3-codex", "openrouter/auto"]
+            "fallbacks": ["openai-codex/gpt-5.4", "openrouter/auto"]
           }
         },
         "tools": {
@@ -135,7 +135,7 @@
         "name": "Content Writer",
         "workspace": "__WORKSPACE_ROOT__/content",
         "model": {
-          "primary": "openai-codex/gpt-5.3-codex",
+          "primary": "openai-codex/gpt-5.4",
           "fallbacks": ["google/gemini-3-pro-preview", "openrouter/auto"]
         },
         "skills": ["claw1-content-calendar"],
@@ -153,7 +153,7 @@
         "workspace": "__WORKSPACE_ROOT__/analytics",
         "model": {
           "primary": "google/gemini-3-pro-preview",
-          "fallbacks": ["openrouter/auto", "openai-codex/gpt-5.3-codex"]
+          "fallbacks": ["openrouter/auto", "openai-codex/gpt-5.4"]
         },
         "skills": ["check-analytics"],
         "tools": {
