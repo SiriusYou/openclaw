@@ -45,6 +45,6 @@
 
 | Model                | Agent                | Avg Latency | Token Efficiency | Notes                                    |
 | -------------------- | -------------------- | ----------- | ---------------- | ---------------------------------------- |
-| gpt-5.3-codex        | main, content-writer | ~3-5s       | Good             | Primary via openai-codex subscription    |
+| gpt-5.4              | main, content-writer | ~3-5s       | Good             | Primary via openai-codex subscription    |
 | gemini-3-pro-preview | analyst              | ~2-4s       | Good             | Primary for analyst, fallback for others |
 | openrouter (auto)    | all                  | Variable    | Variable         | Last-resort fallback                     |
