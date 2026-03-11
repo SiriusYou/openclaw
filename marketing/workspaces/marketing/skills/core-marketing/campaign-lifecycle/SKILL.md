@@ -107,34 +107,39 @@ Before starting any phase, load context:
 
 **Required field**: `recipients` — confirmed recipient list or audience segment (must match Phase 2 PLAN)
 
-**Pre-LAUNCH checklist** (ALL items must pass before proceeding — if any fails, STOP and report which item failed):
+**Pre-LAUNCH checklist**:
+
+Hard (ALL must pass — if any fails, STOP and report which item failed):
 
 - [ ] **Channel confirmed**: distribution channel from PLAN phase is active and accessible
 - [ ] **Recipients confirmed**: `recipients` list/segment is specified and matches PLAN
-- [ ] **Short link embedded**: campaign URL uses a tracked short link (Short.io) — raw URLs are not acceptable
 - [ ] **Timing**: launch falls within Tue-Thu 09:00-11:00 UTC+8 window (optimal engagement). If outside window, flag and require explicit override.
 
-1. Validate all pre-LAUNCH checklist items. If any item fails, return error: `"LAUNCH blocked: <failed item>. Resolve before proceeding."`
+Bonus (skip if not ready, note reason in weekly-status):
+
+- [ ] **Short link embedded** [bonus]: campaign URL uses a tracked short link — if not configured, proceed without tracking and record `no_tracking` + reason in weekly-status
+
+1. Validate all hard pre-LAUNCH checklist items. If any hard item fails, return error: `"LAUNCH blocked: <failed item>. Resolve before proceeding."` Log skipped bonus items in weekly-status.
 2. Execute launch per brief timeline and channel plan
-3. Record launch date, channels activated, short link URL, and initial distribution metrics
+3. Record launch date, channels activated, short link URL (or `no_tracking` if not configured), and initial distribution metrics
 4. Set up monitoring cadence (daily for first week, then per brief schedule)
 5. Store launch state: `memory_search` then update with launch metadata
 
 **Gate**: Pre-LAUNCH checklist passed, campaign live, and monitoring active? → Proceed to Phase 6
-**Fail**: If any checklist item fails → return error listing the failed items. Do NOT proceed to LAUNCH.
+**Fail**: If any hard checklist item fails → return error listing the failed items. Do NOT proceed to LAUNCH. Bonus items may be skipped with documented reason.
 
 ### Phase 6: ANALYZE
 
 **Skills**: `weekly-summary` + `campaign-diagnosis`
 
-1. **Retrieve click data**: pull click statistics from the Short.io dashboard (or API) for all campaign short links. Record human clicks (bot-filtered), geographic breakdown, and referrer sources in `marketing/status/weekly-status.md`.
-2. Run `weekly-summary` to capture performance snapshot (include click data from step 1)
+1. **Retrieve click data** [if short links configured]: pull click statistics from the short link dashboard for all campaign short links. Record human clicks (bot-filtered), geographic breakdown, and referrer sources in `marketing/status/weekly-status.md`. If no short links were used (`no_tracking`), skip this step and note in weekly-status.
+2. Run `weekly-summary` to capture performance snapshot (include click data from step 1 if available)
 3. Compare actuals vs brief KPIs
 4. If underperforming: run `campaign-diagnosis` for root cause analysis
 5. If A/B test running: evaluate test results and pick winner
 6. Use `campaign-decision-gate` for any mid-flight adjustments
 
-**Gate**: Click data retrieved, performance data collected, and analyzed? → Proceed to Phase 7
+**Gate**: Performance data collected and analyzed (click data if available, engagement data regardless)? → Proceed to Phase 7
 
 ### Phase 7: LEARN
 
