@@ -122,4 +122,5 @@ _Fill in each Monday. Keep history for trend tracking._
 **Action items**: ~~D0a~~ Done. D0b: validated 2026-03-10 (monitor ongoing). ~~D1~~ Done. ~~D2: merge PR-A~~ Done 2026-03-13. D3-bonus: create Short.io account + test click recording (informational, 不阻塞 R5).
 
 2026-03-12: upstream/main behind=219; feature ahead=58; D3-hard committed (2b023abdc); CLI upgraded 2026.3.8→2026.3.11
-2026-03-13: D2 PR-A merged; branch rebased (0 behind, 58 ahead); R5 complete (7/7 phases, 5 lessons); timing override documented (operator waived Tue-Thu for self-test); no_tracking documented; T8.1-T8.6 assessment pending
+2026-03-13: D2 PR-A merged; branch rebased (0 behind, 58 ahead); R5 complete (7/7 phases, 5 lessons); timing override documented (operator waived Tue-Thu for self-test); no_tracking documented
+2026-03-13 T8.x assessment: T8.0=PASS, T8.1=PASS, T8.2=PASS (timing deviation noted), T8.3=PASS (5 lessons), T8.4=PASS, T8.5=PASS-with-warning (no_tracking), T8.6=PASS-with-warning (clicks=N/A, engagement=2/2 button paths confirmed; runtime evidence only per D11), T9=Provisional-PASS (evidence refs in T9 section above)
