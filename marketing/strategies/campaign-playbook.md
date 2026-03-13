@@ -1,59 +1,101 @@
 # OpenClaw Marketing — Campaign Playbook
 
+## Campaign Lifecycle
+
+All campaigns follow the 7-phase `campaign-lifecycle` skill:
+**IDEATE → PLAN → CREATE → GATE → LAUNCH → ANALYZE → LEARN**
+
+### Phase Checklist
+
+| Phase   | Key Action                            | Output                                                      |
+| ------- | ------------------------------------- | ----------------------------------------------------------- |
+| IDEATE  | Brainstorm concepts, retrieve lessons | Concept selection + rationale                               |
+| PLAN    | Define brief with hard constraints    | `campaign-brief.md` with channel, recipients, timing, scope |
+| CREATE  | Draft content + CTA variants          | `campaign-content.md` with primary + fallback assets        |
+| GATE    | GO/NO-GO decision                     | `campaign-gate.md` with confidence level                    |
+| LAUNCH  | Send via channel, verify delivery     | Message ID, delivery confirmation                           |
+| ANALYZE | Collect engagement data               | clicks, engagement recorded in weekly-status                |
+| LEARN   | Extract reusable lessons              | Append to `campaign-lessons-learned.md`                     |
+
+### Hard Constraints (enforced by skill)
+
+- `channel` must be specified in Phase 2 (blocks progression if missing)
+- `recipients` must be specified in Phase 5 (blocks launch if missing)
+- Timing window: Tue-Thu 09:00-11:00 UTC+8 for audience-facing content (overridable for self-tests with documented rationale)
+
 ## Campaign Templates
 
-### Template 1: Feature Launch Campaign
-**Goal**: Drive awareness and adoption of a new OpenClaw feature.
-**Duration**: 2 weeks
-**Channels**: Telegram announcement, GitHub release, Twitter/X thread, blog post
+### Template 1: Feature Launch
 
-**Workflow**:
-1. **Pre-launch** (Day -3): Draft announcement copy, prepare demo screenshots/video
-2. **Launch Day**: Publish GitHub release → tweet thread → Telegram blast → blog post
-3. **Follow-up** (Day +3): Community Q&A, collect feedback via Telegram
-4. **Retrospective** (Day +14): Metrics review (stars, installs, engagement)
+**Goal**: Drive awareness of a new OpenClaw feature
+**Duration**: 1 week (Day -1 prep, Day 0 launch, Day +3 follow-up, Day +5 retro)
+**Channel**: Telegram DM → group/channel (when D9 resolved)
 
-**KPIs**: GitHub stars delta, npm install delta, Telegram group growth, blog views
+**Workflow**: Use campaign-lifecycle skill with:
 
-### Template 2: Community Spotlight
-**Goal**: Highlight community contributions, encourage participation.
-**Duration**: 1 week (recurring monthly)
-**Channels**: Telegram, GitHub Discussions, Twitter/X
+- `scope: effect_validation` (real audience)
+- CTA: inline buttons or polls (lesson: low friction)
+- Timing: Tue-Thu morning UTC+8 (lesson: developer engagement)
+- Tracking: short link required for effect validation
 
-**Workflow**:
-1. Identify top contributor or interesting use case from past month
-2. Draft spotlight post (interview or case study format)
-3. Share across channels with contributor mention
-4. Pin in Telegram for 1 week
+### Template 2: Process Validation (Self-Test)
 
-**KPIs**: Contributor engagement, new PRs/issues, community sentiment
+**Goal**: Verify campaign infrastructure works end-to-end
+**Duration**: Single session
+**Channel**: Telegram DM (single recipient)
+
+**Workflow**: Use campaign-lifecycle skill with:
+
+- `scope: process_validation`
+- `recipients: single`
+- Timing: flexible (override acceptable with documentation)
+- Tracking: `no_tracking` acceptable
 
 ### Template 3: Educational Content Series
-**Goal**: Teach users how to build with OpenClaw, establish thought leadership.
-**Duration**: Ongoing (bi-weekly)
-**Channels**: Blog, Telegram, GitHub Wiki
 
-**Workflow**:
-1. Identify common user question or advanced use case
-2. Write tutorial/guide with code examples
-3. Publish and cross-promote
-4. Collect feedback, iterate
+**Goal**: Teach developers how to build with OpenClaw
+**Duration**: Bi-weekly recurring
+**Channel**: Telegram + docs cross-link
 
-**KPIs**: Blog views, time-on-page, tutorial completion rate
+**Content types** (ranked by R4 observation):
 
-## Past Campaign Learnings
+1. Copy-paste tutorials with code examples (highest engagement)
+2. "Before/After" workflow comparisons
+3. Use case showcases with real configs
 
-### Observation: Technical audiences prefer concise, actionable content
-- Long-form blog posts with copy-paste commands outperform abstract thought pieces
-- Code examples drive 3x more engagement than feature descriptions
+## Validated Learnings (R4 + R5)
+
+### Strategy & Timing
+
+- Tue-Thu 09-11AM UTC+8 for developer audience
+- Timing override acceptable for documented self-tests
+- Process validation ≠ effect validation — scope must be declared upfront
+
+### Content & CTA
+
+- Inline buttons > text reply CTAs (low friction)
+- Code examples > feature descriptions (3x engagement)
 - "Before/After" comparisons resonate strongly
 
-### Observation: Telegram is the primary engagement channel
-- Fastest feedback loop (minutes vs hours for GitHub)
-- Group discussions surface real user needs
-- Direct message capability enables 1:1 support
+### Measurement
 
-### Observation: Multi-provider messaging resonates
-- Cost savings story is compelling for individual developers
-- "Never locked in" narrative aligns with open source values
-- Failover reliability is a differentiator worth emphasizing
+- Short link tracking required for effect validation campaigns
+- `no_tracking` acceptable for internal process validation (document the gap)
+- Telegram native view counts unreliable for non-admin bots
+
+### Operations
+
+- Record runtime artifacts (message ID, chat ID, CTA variant) for auditability
+- Runtime memory ≠ git repo (D11) — sync lessons to repo after each campaign
+- Weekly-status must be updated same-day as campaign completion
+
+## Channel Capabilities
+
+| Channel          | Status         | Audience         | Limitation                                                    |
+| ---------------- | -------------- | ---------------- | ------------------------------------------------------------- |
+| Telegram DM      | Active         | Single recipient | No broadcast                                                  |
+| Telegram Group   | Blocked (D9)   | Multi-recipient  | groupPolicy allowFrom empty — all group msgs silently dropped |
+| Telegram Channel | Not configured | Broadcast        | Requires channel creation + bot admin                         |
+| Slack            | Deferred (R7)  | Team workspace   | Not connected                                                 |
+
+**R8 prerequisite**: Fix D9 (add operator chat ID to groupAllowFrom) OR create a Telegram channel for broadcast.
