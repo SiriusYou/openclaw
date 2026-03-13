@@ -36,7 +36,7 @@ All campaigns follow the 7-phase `campaign-lifecycle` skill:
 - `scope: effect_validation` (real audience)
 - CTA: inline buttons or polls (lesson: low friction)
 - Timing: Tue-Thu morning UTC+8 (lesson: developer engagement)
-- Tracking: short link required for effect validation
+- Tracking: short link required for effect validation (if unavailable: document `no_tracking` + measurement limits)
 
 ### Template 2: Process Validation (Self-Test)
 
@@ -91,11 +91,11 @@ All campaigns follow the 7-phase `campaign-lifecycle` skill:
 
 ## Channel Capabilities
 
-| Channel          | Status         | Audience         | Limitation                                                    |
-| ---------------- | -------------- | ---------------- | ------------------------------------------------------------- |
-| Telegram DM      | Active         | Single recipient | No broadcast                                                  |
-| Telegram Group   | Blocked (D9)   | Multi-recipient  | groupPolicy allowFrom empty — all group msgs silently dropped |
-| Telegram Channel | Not configured | Broadcast        | Requires channel creation + bot admin                         |
-| Slack            | Deferred (R7)  | Team workspace   | Not connected                                                 |
+| Channel          | Status         | Audience         | Limitation                                                      |
+| ---------------- | -------------- | ---------------- | --------------------------------------------------------------- |
+| Telegram DM      | Active         | Single recipient | No broadcast                                                    |
+| Telegram Group   | Active         | Multi-recipient  | D9 fixed 2026-03-13 (groupAllowFrom added); verified msg_id=315 |
+| Telegram Channel | Not configured | Broadcast        | Requires channel creation + bot admin                           |
+| Slack            | Deferred (R7)  | Team workspace   | Not connected                                                   |
 
-**R8 prerequisite**: Fix D9 (add operator chat ID to groupAllowFrom) OR create a Telegram channel for broadcast.
+**R8 prerequisite**: ~~Fix D9~~ Done (2026-03-13). Telegram channel for broadcast: optional (not yet configured).

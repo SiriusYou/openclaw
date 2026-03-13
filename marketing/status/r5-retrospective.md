@@ -32,7 +32,7 @@
 ## Strategic Assessment
 
 - R4 + R5 together validated the process infrastructure (lifecycle skill, gate, lessons loop, cron monitoring)
-- Audience-scale channels not yet operationally ready: Telegram group policy (D9) blocks group messages; Slack deferred
+- Audience-scale channels: Telegram group now operational (D9 fixed 2026-03-13); Slack deferred
 - Next step requires knowledge base refresh before any audience-facing campaign
 
 ## R6/R7/R8 Priority Decision
@@ -45,7 +45,7 @@
 
 ## Open Items Carried Forward
 
-- D9: Telegram groupPolicy (blocks group messages)
+- ~~D9: Telegram groupPolicy~~ Fixed 2026-03-13 (groupAllowFrom added, group send verified msg_id=315)
 - D11: Runtime artifact auditability (ephemeral evidence)
 - D3-bonus: Short.io setup (informational)
 - PR-B/C: Config/scripts and plugins/tests merge (branch reduction)
