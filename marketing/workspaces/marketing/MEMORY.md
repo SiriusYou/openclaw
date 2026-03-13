@@ -25,7 +25,7 @@
 | Campaign                   | Channel     | Status   | Start      | KPIs                  |
 | -------------------------- | ----------- | -------- | ---------- | --------------------- |
 | "Under the Hood" (Pilot 1) | Telegram DM | Complete | 2026-03-07 | 7/7 phases, 3 lessons |
-| R5 Campaign (TBD)          | Telegram DM | Planned  | Post-D3    | T8.1-T8.6             |
+| R5 Process Validation      | Telegram DM | Complete | 2026-03-13 | 7/7 phases, 5 lessons |
 
 ## Lessons Learned
 
