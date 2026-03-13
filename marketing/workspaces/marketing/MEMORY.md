@@ -22,10 +22,11 @@
 
 ## Active Campaigns
 
-| Campaign                   | Channel     | Status   | Start      | KPIs                  |
-| -------------------------- | ----------- | -------- | ---------- | --------------------- |
-| "Under the Hood" (Pilot 1) | Telegram DM | Complete | 2026-03-07 | 7/7 phases, 3 lessons |
-| R5 Process Validation      | Telegram DM | Complete | 2026-03-13 | 7/7 phases, 5 lessons |
+| Campaign                   | Channel     | Status                            | Start      | KPIs                                          |
+| -------------------------- | ----------- | --------------------------------- | ---------- | --------------------------------------------- |
+| "Under the Hood" (Pilot 1) | Telegram DM | Complete                          | 2026-03-07 | 7/7 phases, 3 lessons                         |
+| R5 Process Validation      | Telegram DM | Complete                          | 2026-03-13 | 7/7 phases, 5 lessons                         |
+| R8 Multi-Surface Campaign  | DM + Group  | Phases 1-4 done, Launch scheduled | 2026-03-13 | Gate=GO, launch window: Tue 03-17 09:00 UTC+8 |
 
 ## Lessons Learned
 

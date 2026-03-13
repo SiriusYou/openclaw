@@ -37,6 +37,7 @@
 
 ## Editorial Calendar
 
-| Week       | Topic                   | Channel     | Status  | Owner      |
-| ---------- | ----------------------- | ----------- | ------- | ---------- |
-| 2026-03-10 | R5 Campaign (TBD topic) | Telegram DM | Planned | main agent |
+| Week       | Topic                          | Channel     | Status                            | Owner      |
+| ---------- | ------------------------------ | ----------- | --------------------------------- | ---------- |
+| 2026-03-13 | R5 Process Validation          | Telegram DM | Complete                          | main agent |
+| 2026-03-17 | R8 "One Agent, Three Surfaces" | DM + Group  | Phases 1-4 done, Launch scheduled | main agent |

@@ -93,16 +93,16 @@ _Fill in each Monday. Keep history for trend tracking._
 
 ### Week of 2026-03-09
 
-| #   | Health Indicator       | Status                                     | Notes                                                                 |
-| --- | ---------------------- | ------------------------------------------ | --------------------------------------------------------------------- |
-| 1   | Gateway uptime (7d)    | ~95%                                       | Mac sleep interruptions                                               |
-| 2   | Cron success rate (7d) | 6/6 OK (validated 2026-03-10 08:16 UTC+8)  | sandbox off + maxConcurrentRuns: 3 applied; monitor ongoing           |
-| 3   | Daily cost (7d avg)    | ~$0.00                                     | NORMAL; subscription-based                                            |
-| 4   | Telegram delivery      | OK                                         | @Jiayo_bot active                                                     |
-| 5   | Evolved skills (total) | 5                                          | No new this week                                                      |
-| 6   | Backup freshness       | Active                                     | Daily 3AM snapshots (30-day retention)                                |
-| 7   | Upstream drift         | behind=0, ahead=58                         | as of 2026-03-12; D2 PR-A merged, PR-B/C pending (ahead ≤20 by 03-22) |
-| 8   | Open issues            | D1 mitigated, D2 merged, D9 open, D11 open | D9=groupPolicy (low), D11=ephemeral audit evidence (low)              |
+| #   | Health Indicator       | Status                                      | Notes                                                                                      |
+| --- | ---------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| 1   | Gateway uptime (7d)    | ~95%                                        | Mac sleep interruptions                                                                    |
+| 2   | Cron success rate (7d) | 6/6 OK (validated 2026-03-10 08:16 UTC+8)   | sandbox off + maxConcurrentRuns: 3 applied; monitor ongoing                                |
+| 3   | Daily cost (7d avg)    | ~$0.00                                      | NORMAL; subscription-based                                                                 |
+| 4   | Telegram delivery      | OK                                          | @Jiayo_bot active                                                                          |
+| 5   | Evolved skills (total) | 5                                           | No new this week                                                                           |
+| 6   | Backup freshness       | Active                                      | Daily 3AM snapshots (30-day retention)                                                     |
+| 7   | Upstream drift         | behind=0                                    | D2 PR-A merged; PR-B/C pending; ahead count omitted (changes with every commit)            |
+| 8   | Open issues            | D1 mitigated, D2 merged, D9 fixed, D11 open | D9=groupPolicy fixed (groupAllowFrom added 2026-03-13), D11=ephemeral audit evidence (low) |
 
 **CLI**: v2026.3.11. **Tests**: 31/31. **R4**: Complete (7/7 phases, 3 lessons). **R5**: Complete (7/7 phases, 5 new lessons).
 
@@ -116,11 +116,12 @@ _Fill in each Monday. Keep history for trend tracking._
 - D0a (implementation): PASS — weekly-status, cron-health-check.sh, RUNBOOK checklist all delivered
 - D0b (runtime): PASS (at validation 2026-03-10 08:16 UTC+8). Fix: sandbox off + maxConcurrentRuns: 3; suspected cause: Docker network isolation + cron lane blocking on timeout
 - D1 (memory grounding): PASS — 3 MEMORY.md files grounded with ≥3 actionable items each
-- D2 PR-A: MERGED (SiriusYou/openclaw#1, 2026-03-13T04:11:49Z); branch rebased (0 behind, 58 ahead)
+- D2 PR-A: MERGED (SiriusYou/openclaw#1, 2026-03-13T04:11:49Z); branch rebased (0 behind)
 - D3-hard: Done (commit 2b023abdc, SKILL.md short link→optional); D3-bonus: Short.io account pending (user action, informational)
 
 **Action items**: ~~D0a~~ Done. D0b: validated 2026-03-10 (monitor ongoing). ~~D1~~ Done. ~~D2: merge PR-A~~ Done 2026-03-13. D3-bonus: create Short.io account + test click recording (informational, 不阻塞 R5).
 
-2026-03-12: upstream/main behind=219; feature ahead=58; D3-hard committed (2b023abdc); CLI upgraded 2026.3.8→2026.3.11
-2026-03-13: D2 PR-A merged; branch rebased (0 behind, 58 ahead); R5 complete (7/7 phases, 5 lessons); timing override documented (operator waived Tue-Thu for self-test); no_tracking documented
+2026-03-12: upstream/main behind=219 (snapshot); D3-hard committed (2b023abdc); CLI upgraded 2026.3.8→2026.3.11
+2026-03-13: D2 PR-A merged; branch rebased (0 behind); R5 complete (7/7 phases, 5 lessons); timing override documented (operator waived Tue-Thu for self-test); no_tracking documented
 2026-03-13 T8.x assessment: T8.0=PASS, T8.1=PASS, T8.2=PASS (timing deviation noted), T8.3=PASS (5 lessons), T8.4=PASS, T8.5=PASS-with-warning (no_tracking), T8.6=PASS-with-warning (clicks=N/A, engagement=2/2 button paths confirmed; runtime evidence only per D11), T9=Provisional-PASS (evidence refs in T9 section above)
+2026-03-13: D9 FIXED — added groupAllowFrom=["8113291785"] to runtime config; gateway restarted; group send verified (msg_id=315, chat_id=-5234143314, group="Openclaw Dev"); R6 complete (3 knowledge base files); R8 Phases 1-4 complete (IDEATE→GATE=GO); R8 Phase 5 (LAUNCH) scheduled for next valid Tue-Thu 09:00-11:00 UTC+8 window (2026-03-17 earliest)

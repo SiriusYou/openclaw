@@ -30,11 +30,12 @@
 
 ## Weekly Reports
 
-| Week       | Key Wins                            | Key Issues                                     | Recommendations                             |
-| ---------- | ----------------------------------- | ---------------------------------------------- | ------------------------------------------- |
-| 2026-03-07 | R4 pilot 7/7 phases, 3 lessons      | TG view counts unreliable, weekend timing poor | Apply lessons in R5; add link tracking (D3) |
-| 2026-03-09 | D0 rebaseline complete, 31/31 tests | 52 commits ahead (long branch)                 | D2 branch merge PR-A before R5              |
-| 2026-03-13 | R5 complete 7/7, D2 PR-A merged     | no_tracking (Short.io not configured)          | Set up Short.io for R6; sync PR-B/C         |
+| Week       | Key Wins                            | Key Issues                                     | Recommendations                                                         |
+| ---------- | ----------------------------------- | ---------------------------------------------- | ----------------------------------------------------------------------- |
+| 2026-03-07 | R4 pilot 7/7 phases, 3 lessons      | TG view counts unreliable, weekend timing poor | Apply lessons in R5; add link tracking (D3)                             |
+| 2026-03-09 | D0 rebaseline complete, 31/31 tests | 52 commits ahead (long branch)                 | D2 branch merge PR-A before R5                                          |
+| 2026-03-13 | R5 complete 7/7, D2 PR-A merged     | no_tracking (Short.io not configured)          | Set up Short.io for R6; sync PR-B/C                                     |
+| 2026-03-13 | D9 fixed, R6 done, R8 Ph1-4 done    | 2-member group insufficient for effect metrics | Grow group before R8 launch; track via Short.io or document no_tracking |
 
 ## Cost Analysis
 
