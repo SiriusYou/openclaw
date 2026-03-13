@@ -37,3 +37,12 @@
 - **If validating channel operations, then record runtime artifacts (chat ID, message ID, CTA variant, confirmations, and commit history) so the run is auditable end-to-end.**
   - _Source_: R5 Telegram DM Process Validation (2026-03-13)
   - _Context_: The lifecycle was reconstructable from recorded message metadata, confirmations, memory files, and git commits.
+- **If validating Telegram multi-surface operations, then test DM and Group in the same controlled round to confirm both delivery paths together.**
+  - _Source_: R8 Multi-Channel Telegram Process Validation (2026-03-13)
+  - _Context_: A single round verified successful sends and CTA interaction handling across both Telegram surfaces.
+- **If using Telegram inline buttons, then each button must include both visible text and `callback_data`.**
+  - _Source_: R8 Multi-Channel Telegram Process Validation (2026-03-13)
+  - _Context_: Successful CTA handling depended on the correct text + callback payload pairing.
+- **If a Telegram Group send succeeds after an infrastructure fix, then treat it as process validation evidence, not audience validation evidence.**
+  - _Source_: R8 Multi-Channel Telegram Process Validation (2026-03-13)
+  - _Context_: The D9-fix follow-up confirmed group delivery readiness, but the tiny audience and off-window timing prevented effect claims.
