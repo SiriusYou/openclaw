@@ -446,7 +446,7 @@ AGENTS_EOF
     sleep 2
 
     # Verify
-    if openclaw --profile "$PROFILE" gateway status &>/dev/null 2>&1; then
+    if openclaw --profile "$PROFILE" gateway status --require-rpc &>/dev/null 2>&1; then
       ok "Gateway running on port $port"
     else
       warn "Gateway may not be fully started yet"
@@ -465,7 +465,7 @@ AGENTS_EOF
   # Only mark active if gateway is confirmed running
   local final_status="provisioned"
   if command -v openclaw &>/dev/null; then
-    if openclaw --profile "$PROFILE" gateway status &>/dev/null 2>&1; then
+    if openclaw --profile "$PROFILE" gateway status --require-rpc &>/dev/null 2>&1; then
       final_status="active"
     else
       final_status="provisioned"
@@ -561,7 +561,7 @@ cmd_resume() {
     # Wait briefly, then verify gateway is actually running
     sleep 2
     local resume_status="provisioned"
-    if openclaw --profile "$PROFILE" gateway status &>/dev/null 2>&1; then
+    if openclaw --profile "$PROFILE" gateway status --require-rpc &>/dev/null 2>&1; then
       resume_status="active"
       ok "Gateway confirmed running for $CUSTOMER_ID"
     else
@@ -615,7 +615,7 @@ cmd_status() {
 
   if command -v openclaw &>/dev/null; then
     echo -n "  Gateway:  "
-    if openclaw --profile "$PROFILE" gateway status &>/dev/null 2>&1; then
+    if openclaw --profile "$PROFILE" gateway status --require-rpc &>/dev/null 2>&1; then
       echo -e "${GREEN}running${NC}"
     else
       echo -e "${RED}stopped${NC}"

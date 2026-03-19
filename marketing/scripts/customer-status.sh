@@ -87,7 +87,7 @@ for manifest in "$CUSTOMERS_DIR"/*.json; do
   # Check gateway status
   gw_status="unknown"
   if [[ "$HAS_CLI" == "true" ]] && [[ "$mstatus" != "disabled" ]]; then
-    if openclaw --profile "$cid" gateway status &>/dev/null 2>&1; then
+    if openclaw --profile "$cid" gateway status --require-rpc &>/dev/null 2>&1; then
       gw_status="running"
       running_count=$((running_count + 1))
     else
