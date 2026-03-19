@@ -79,6 +79,8 @@ for manifest in "$CUSTOMERS_DIR"/*.json; do
     continue
   }
 
+  customer_count=$((customer_count + 1))
+
   # Restore spaces in brand name
   brand="${brand//_/ }"
 

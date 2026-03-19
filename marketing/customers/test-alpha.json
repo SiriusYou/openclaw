@@ -1,0 +1,39 @@
+{
+  "_comment": "M1 verification test customer",
+  "_constraint": "customerId = profile — MUST be identical. Agent ID is always 'main' within each profile (OpenClaw constraint).",
+  "customerId": "test-alpha",
+  "status": "active",
+  "port": 18790,
+  "channels": ["telegram"],
+  "telegramBotToken": {
+    "_comment": "To be configured after provisioning",
+    "ref": "env:TELEGRAM_BOT_TOKEN_TEST_ALPHA"
+  },
+  "brandName": "Test Alpha Brand",
+  "audience": "Developer community, tech enthusiasts",
+  "modelProfile": {
+    "primary": "openai-codex/gpt-5.4",
+    "fallbacks": ["google/gemini-3-pro-preview", "openrouter/auto"]
+  },
+  "skills": [
+    "campaign-brief",
+    "campaign-lifecycle",
+    "campaign-diagnosis",
+    "structured-brainstorm",
+    "content-ab-test"
+  ],
+  "sandbox": {
+    "mode": "off"
+  },
+  "tools": {
+    "profile": "full",
+    "fs": {
+      "workspaceOnly": true
+    },
+    "exec": {
+      "security": "deny"
+    }
+  },
+  "hostBoundSkillsDenylist": ["things-mac", "tmux", "1password"],
+  "_provisionedAt": "2026-03-19T14:30:55.508Z"
+}
