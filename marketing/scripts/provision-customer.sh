@@ -203,18 +203,32 @@ cmd_create() {
     exit 1
   fi
 
-  # Read manifest fields
-  local port brand_name audience
-  port="$(manifest_field "port")"
-  brand_name="$(manifest_field "brandName")"
-  audience="$(manifest_field "audience")"
-  local model_profile skills_json sandbox_json tools_json
-  model_profile="$(manifest_field "modelProfile")"
-  skills_json="$(manifest_field "skills" 2>/dev/null || echo '[]')"
-  sandbox_json="$(manifest_field "sandbox" 2>/dev/null || echo '{"mode":"off"}')"
-  tools_json="$(manifest_field "tools" 2>/dev/null || echo '{"profile":"full"}')"
-  local host_bound_denylist
-  host_bound_denylist="$(manifest_field "hostBoundSkillsDenylist" 2>/dev/null || echo '[]')"
+  # Read all manifest fields in one node process (avoids 8+ separate node spawns)
+  local manifest_all
+  manifest_all="$(node -e "
+    const m = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
+    const r = {};
+    r.port = m.port;
+    r.brandName = m.brandName || '';
+    r.audience = m.audience || '';
+    r.modelProfile = m.modelProfile || {};
+    r.skills = m.skills || [];
+    r.sandbox = m.sandbox || {mode:'off'};
+    r.tools = m.tools || {profile:'full'};
+    r.hostBoundSkillsDenylist = m.hostBoundSkillsDenylist || [];
+    console.log(JSON.stringify(r));
+  " "$MANIFEST")" || { err "Failed to read manifest: $MANIFEST"; exit 1; }
+
+  # Extract fields from cached JSON (single node process per field, reading from argv not file)
+  local port brand_name audience model_profile skills_json sandbox_json tools_json host_bound_denylist
+  port="$(node -p "JSON.parse(process.argv[1]).port" "$manifest_all")"
+  brand_name="$(node -p "JSON.parse(process.argv[1]).brandName" "$manifest_all")"
+  audience="$(node -p "JSON.parse(process.argv[1]).audience" "$manifest_all")"
+  model_profile="$(node -p "JSON.stringify(JSON.parse(process.argv[1]).modelProfile)" "$manifest_all")"
+  skills_json="$(node -p "JSON.stringify(JSON.parse(process.argv[1]).skills)" "$manifest_all")"
+  sandbox_json="$(node -p "JSON.stringify(JSON.parse(process.argv[1]).sandbox)" "$manifest_all")"
+  tools_json="$(node -p "JSON.stringify(JSON.parse(process.argv[1]).tools)" "$manifest_all")"
+  host_bound_denylist="$(node -p "JSON.stringify(JSON.parse(process.argv[1]).hostBoundSkillsDenylist)" "$manifest_all")"
 
   info "Customer: $CUSTOMER_ID"
   info "Brand:    $brand_name"
@@ -238,10 +252,7 @@ cmd_create() {
 
   # --- Step 1: Create directories ---
   step "Creating directories"
-  mkdir -p "$STATE_DIR"
-  mkdir -p "$WORKSPACE_DIR"
-  mkdir -p "$WORKSPACE_DIR/memory"
-  mkdir -p "$WORKSPACE_DIR/skills"
+  mkdir -p "$WORKSPACE_DIR/memory" "$WORKSPACE_DIR/skills"
   ok "Directories created"
 
   # --- Step 2: Generate gateway config ---
@@ -400,15 +411,15 @@ AGENTS_EOF
     # Add skills.entries.<key>.enabled: false to the generated config
     node -e "
       const fs = require('fs');
-      const config = JSON.parse(fs.readFileSync('${CONFIG_PATH}', 'utf8'));
-      const denylist = ${host_bound_denylist};
+      const config = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+      const denylist = JSON.parse(process.argv[2]);
       if (!config.skills) config.skills = {};
       if (!config.skills.entries) config.skills.entries = {};
       for (const skill of denylist) {
         config.skills.entries[skill] = { enabled: false };
       }
-      fs.writeFileSync('${CONFIG_PATH}', JSON.stringify(config, null, 2));
-    "
+      fs.writeFileSync(process.argv[1], JSON.stringify(config, null, 2));
+    " "$CONFIG_PATH" "$host_bound_denylist"
     ok "Host-bound skills disabled in config: $deny_count entries"
   fi
 

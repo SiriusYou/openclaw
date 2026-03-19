@@ -64,24 +64,19 @@ for manifest in "$CUSTOMERS_DIR"/*.json; do
   fname="$(basename "$manifest" .json)"
   [[ "$fname" == "example" ]] && continue
 
-  # Skip template manifests (not yet provisioned)
-  local tpl_status
-  tpl_status="$(node -e "console.log(JSON.parse(require('fs').readFileSync('$manifest','utf8')).status||'')" 2>/dev/null || true)"
-  [[ "$tpl_status" == "template" ]] && continue
-
-  customer_count=$((customer_count + 1))
-
-  # Read manifest fields
+  # Read manifest fields in a single node call (also filters templates)
   read -r cid brand port mstatus < <(node -e "
-    const m = JSON.parse(require('fs').readFileSync('$manifest', 'utf8'));
+    const m = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
+    if (m.status === 'template') { process.exit(1); }
     console.log([
       m.customerId || '$fname',
       (m.brandName || '?').replace(/\s+/g, '_'),
       m.port || '?',
       m.status || 'unknown'
     ].join(' '));
-  " 2>/dev/null) || {
-    cid="$fname"; brand="?"; port="?"; mstatus="error"
+  " "$manifest" 2>/dev/null) || {
+    # exit(1) from template check or parse error — skip
+    continue
   }
 
   # Restore spaces in brand name
