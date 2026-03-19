@@ -439,7 +439,7 @@ AGENTS_EOF
 
     info "Starting gateway..."
     openclaw --profile "$PROFILE" gateway start 2>&1 || {
-      warn "gateway start returned non-zero — check: openclaw --profile $PROFILE gateway status"
+      warn "gateway start returned non-zero — check: openclaw --profile $PROFILE gateway status --require-rpc"
     }
 
     # Brief wait for startup
@@ -450,7 +450,7 @@ AGENTS_EOF
       ok "Gateway running on port $port"
     else
       warn "Gateway may not be fully started yet"
-      info "Check manually: openclaw --profile $PROFILE gateway status"
+      info "Check manually: openclaw --profile $PROFILE gateway status --require-rpc"
     fi
   else
     warn "openclaw CLI not found — skipping gateway install/start"
@@ -566,7 +566,7 @@ cmd_resume() {
       ok "Gateway confirmed running for $CUSTOMER_ID"
     else
       warn "Gateway start returned success but status probe failed"
-      warn "Check manually: openclaw --profile $PROFILE gateway status"
+      warn "Check manually: openclaw --profile $PROFILE gateway status --require-rpc"
     fi
   else
     err "openclaw CLI not found"
