@@ -768,3 +768,98 @@ When editing `marketing/openclaw.json` (source config):
 
 > **Why both?** `setup.sh` only copies source → runtime on first run.
 > Subsequent edits to source alone do NOT update the running gateway.
+
+---
+
+## Multi-Client Operations (Phase 1)
+
+### Architecture
+
+Each customer = one independent gateway instance, isolated via `--profile`:
+
+- **Profile**: `openclaw --profile {customerId} ...`
+- **State dir**: `~/.openclaw-{customerId}/`
+- **Config**: `~/.openclaw-{customerId}/openclaw.json`
+- **Port**: unique per customer (18790, 18791, ...)
+- **Identity**: `customerId = profile` (identical). Agent ID is always `main` within each profile (OpenClaw constraint). Profile-level isolation keeps each profile's `main` independent.
+
+Your own internal agents (main/analyst/content-writer) run on the default gateway (port 18789).
+
+### Customer Lifecycle
+
+```bash
+# Create customer manifest
+cp marketing/customers/example.json marketing/customers/acme-corp.json
+# Edit acme-corp.json with customer details (brandName, audience, port, etc.)
+
+# Provision (creates state dir, config, workspace, installs+starts gateway)
+bash marketing/scripts/provision-customer.sh create acme-corp
+
+# After provisioning, add Telegram bot token:
+openclaw --profile acme-corp channels add --channel telegram --token '<BOT_TOKEN>'
+
+# Add API keys to auth profiles:
+# Edit ~/.openclaw-acme-corp/agents/main/agent/auth-profiles.json
+
+# Restart to apply:
+openclaw --profile acme-corp daemon restart
+```
+
+### Daily Operations
+
+```bash
+# Check all customer gateways
+bash marketing/scripts/customer-status.sh
+
+# Check single customer
+bash marketing/scripts/provision-customer.sh status acme-corp
+
+# Pause a customer (stops gateway, preserves data)
+bash marketing/scripts/provision-customer.sh pause acme-corp
+
+# Resume
+bash marketing/scripts/provision-customer.sh resume acme-corp
+```
+
+### Export & Destroy
+
+```bash
+# Export customer data archive (for backup or migration)
+bash marketing/scripts/provision-customer.sh export acme-corp
+# → marketing/exports/acme-corp-YYYYMMDD-HHMMSS.tar.gz
+
+# Destroy (stops gateway, exports, archives state dir)
+bash marketing/scripts/provision-customer.sh destroy acme-corp
+```
+
+### Port Allocation
+
+| Instance       | Port    | Notes           |
+| -------------- | ------- | --------------- |
+| Operator (you) | 18789   | Default gateway |
+| Customer 1     | 18790   | First customer  |
+| Customer 2     | 18791   | ...             |
+| Customer N     | 18789+N | Sequential      |
+
+Port conflicts are validated by `provision-customer.sh create`.
+
+### Secret Scanning (Pre-Package)
+
+Before packaging or sharing any code:
+
+```bash
+bash marketing/scripts/pre-package-scan.sh
+# Exit 0 = safe, Exit 1 = leaks found
+# Use --fix for remediation hints
+```
+
+### Troubleshooting
+
+| Symptom                                  | Fix                                                                                                   |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Gateway won't start                      | Check port conflict: `lsof -i :PORT`                                                                  |
+| "profile not found"                      | Ensure `--profile` comes BEFORE subcommand                                                            |
+| Config not loading                       | Verify `~/.openclaw-{id}/openclaw.json` exists                                                        |
+| Telegram not responding                  | Check bot token: `openclaw --profile {id} channels status --probe`                                    |
+| Auth profiles not found                  | Edit `~/.openclaw-{id}/agents/main/agent/auth-profiles.json`                                          |
+| Manifest says "provisioned" not "active" | Gateway didn't start — fix the issue, then `bash marketing/scripts/provision-customer.sh resume {id}` |

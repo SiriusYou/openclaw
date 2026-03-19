@@ -141,3 +141,8 @@ changelog/fragments/
 
 # Local scratch workspace
 .tmp/
+
+# Multi-client customer exports and secrets
+marketing/exports/
+marketing/customers/*.secret
+.env.customer.*
