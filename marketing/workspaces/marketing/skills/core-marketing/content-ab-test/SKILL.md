@@ -19,6 +19,7 @@ metadata:
 ## Recording Results
 
 Update memory with test record:
+
 - Test ID, date, hypothesis
 - Variants with descriptions
 - Channel, audience segment

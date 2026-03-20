@@ -389,6 +389,39 @@ IDEATE → PLAN → CREATE → GATE → LAUNCH → ANALYZE → LEARN
 - Track all links with UTM parameters
 AGENTS_EOF
 
+  # Status templates
+  mkdir -p "$WORKSPACE_DIR/status"
+
+  cat > "$WORKSPACE_DIR/status/weekly-status.md" <<STATUS_EOF
+# Weekly Status — ${brand_name}
+
+<!-- Append weekly summaries below. Do not overwrite existing entries. -->
+<!-- Format: use the weekly-summary skill output template. -->
+STATUS_EOF
+
+  cat > "$WORKSPACE_DIR/status/monthly-status.md" <<MONTHLY_EOF
+# Monthly Status — ${brand_name}
+
+<!-- Append monthly retrospective summaries below. Do not overwrite existing entries. -->
+<!-- Format: use the campaign-retrospective skill output template. -->
+MONTHLY_EOF
+
+  # Campaign lessons template
+  cat > "$WORKSPACE_DIR/memory/campaign-lessons-learned.md" <<LESSONS_EOF
+# Campaign Lessons Learned — ${brand_name}
+
+<!-- Append lessons in "If X, then Y" format. Do not overwrite existing entries. -->
+<!-- Each lesson should include: source campaign, phase, and evidence. -->
+LESSONS_EOF
+
+  # HEARTBEAT.md
+  cat > "$WORKSPACE_DIR/HEARTBEAT.md" <<HEARTBEAT_EOF
+# Heartbeat — ${brand_name}
+
+Last provisioned: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+Status: active
+HEARTBEAT_EOF
+
   ok "Workspace seeded: $WORKSPACE_DIR"
 
   # --- Step 4: Copy marketing skills to customer workspace ---

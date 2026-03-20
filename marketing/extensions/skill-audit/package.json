@@ -1,10 +1,10 @@
 {
   "name": "openclaw-plugin-skill-audit",
   "version": "0.1.0",
-  "description": "Security audit gate for agent-evolved skills",
-  "main": "index.ts",
-  "type": "module",
   "private": true,
+  "description": "Security audit gate for agent-evolved skills",
+  "type": "module",
+  "main": "index.ts",
   "peerDependencies": {
     "openclaw": "*"
   }

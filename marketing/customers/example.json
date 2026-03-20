@@ -26,8 +26,23 @@
     "campaign-lifecycle",
     "campaign-diagnosis",
     "structured-brainstorm",
-    "content-ab-test"
+    "content-ab-test",
+    "content-repurposing",
+    "campaign-decision-gate",
+    "weekly-summary",
+    "campaign-retrospective"
   ],
+
+  "reporting": {
+    "_comment": "Optional — configure per customer for automated weekly/monthly reports",
+    "timezone": "Asia/Shanghai",
+    "delivery": {
+      "channel": "telegram",
+      "target": ""
+    },
+    "weekly": { "cron": "0 9 * * 1" },
+    "monthly": { "cron": "0 9 1 * *" }
+  },
 
   "sandbox": {
     "mode": "off"

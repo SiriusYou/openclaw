@@ -863,3 +863,89 @@ bash marketing/scripts/pre-package-scan.sh
 | Telegram not responding                  | Check bot token: `openclaw --profile {id} channels status --probe`                                    |
 | Auth profiles not found                  | Edit `~/.openclaw-{id}/agents/main/agent/auth-profiles.json`                                          |
 | Manifest says "provisioned" not "active" | Gateway didn't start — fix the issue, then `bash marketing/scripts/provision-customer.sh resume {id}` |
+
+---
+
+## Phase 3: Customer Operationalization
+
+### Overview
+
+Phase 3 completes the managed-service workflow: 4 missing skills filled, per-customer cron reporting, onboarding checklist, and workspace template enhancements.
+
+### Per-Customer Cron Setup
+
+Each customer gets two automated cron jobs delivered to their Telegram:
+
+| Job                          | Schedule                    | Skill Used               | Purpose                                |
+| ---------------------------- | --------------------------- | ------------------------ | -------------------------------------- |
+| `{id}-weekly-summary`        | Monday (configurable)       | `weekly-summary`         | Performance snapshot with KPI tracking |
+| `{id}-monthly-retrospective` | 1st of month (configurable) | `campaign-retrospective` | Post-campaign lessons extraction       |
+
+```bash
+# Configure crons for a customer (reads reporting config from manifest)
+bash marketing/scripts/configure-customer-crons.sh acme-corp
+
+# Dry run (show what would be created)
+bash marketing/scripts/configure-customer-crons.sh --dry-run acme-corp
+
+# Remove crons (for pause/destroy scenarios)
+bash marketing/scripts/configure-customer-crons.sh --remove acme-corp
+
+# Verify crons created
+openclaw --profile acme-corp cron list
+```
+
+**Fail-closed**: if `reporting.delivery.target` is missing in the manifest, the script refuses to create cron jobs.
+
+**Idempotent**: running the script again updates existing jobs rather than creating duplicates.
+
+### Weekly Summary Delivery Verification
+
+After configuring crons, verify the weekly summary fires correctly:
+
+```bash
+# Manual trigger
+openclaw --profile acme-corp cron list --json | jq -r '.jobs[] | select(.name | endswith("-weekly-summary")) | .id'
+openclaw --profile acme-corp cron run <job-id>
+
+# Check execution
+openclaw --profile acme-corp cron runs --id <job-id> --limit 1
+```
+
+### Customer Campaign Lifecycle Walkthrough
+
+Full 7-phase lifecycle for a customer (via their Telegram bot):
+
+1. **IDEATE**: "Brainstorm 3 campaign concepts for [topic]" (uses `structured-brainstorm`)
+2. **PLAN**: "Create a campaign brief for [selected concept]" (uses `campaign-brief`)
+3. **CREATE**: "Draft content and adapt for Telegram and Twitter" (uses `content-ab-test` + `content-repurposing`)
+4. **GATE**: "Run the decision gate for this campaign" (uses `campaign-decision-gate`)
+5. **LAUNCH**: "Launch the campaign" (pre-launch checklist enforced)
+6. **ANALYZE**: "Generate a weekly performance summary" (uses `weekly-summary` + `campaign-diagnosis`)
+7. **LEARN**: "Run a retrospective on the completed campaign" (uses `campaign-retrospective`)
+
+### Troubleshooting Per-Customer Crons
+
+```bash
+# Cron job not firing
+openclaw --profile {id} cron list                    # Is it enabled?
+openclaw --profile {id} gateway status --require-rpc  # Is gateway running?
+openclaw --profile {id} cron runs --id <job-id> --limit 5  # Check history
+
+# Common errors:
+# "cron: job execution timed out" → model hung or expensive tools
+#   Fix: simplify prompt, increase --timeout-seconds
+# "send blocked by session policy" → sendPolicy misconfigured
+#   Fix: ensure sendPolicy rules include "agent:main:" prefix
+# Cron fires but no Telegram delivery → check delivery target in manifest
+#   Fix: verify reporting.delivery.target matches actual Telegram chat ID
+```
+
+### M3 Exit Criteria
+
+- [ ] All 9 core skills exist in `marketing/workspaces/marketing/skills/core-marketing/`
+- [ ] `campaign-lifecycle` references only existing skills
+- [ ] `configure-customer-crons.sh` creates 2 crons on test-alpha
+- [ ] Full 7-phase campaign completes on test-alpha without skill-not-found errors
+- [ ] Weekly summary delivered via Telegram to operator
+- [ ] Vitest skills consistency tests pass

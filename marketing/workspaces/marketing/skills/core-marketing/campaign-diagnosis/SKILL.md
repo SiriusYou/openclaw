@@ -17,6 +17,7 @@ metadata:
 ## Step 2: Hypothesize (generate 3+ hypotheses)
 
 Common root causes:
+
 - **Audience**: targeting too broad/narrow, audience fatigue
 - **Creative**: message-market mismatch, worn-out creative
 - **Channel**: algorithm changes, competition surge, timing
@@ -26,6 +27,7 @@ Common root causes:
 ## Step 3: Test Each Hypothesis
 
 For each hypothesis:
+
 1. What data would confirm or reject it?
 2. Check that data (memory, analytics, web search)
 3. Rate confidence: HIGH / MEDIUM / LOW

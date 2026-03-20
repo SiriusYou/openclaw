@@ -1,10 +1,10 @@
 {
   "name": "openclaw-plugin-marketing-feedback",
   "version": "0.1.0",
-  "description": "Marketing feedback loop plugin for OpenClaw",
-  "main": "index.ts",
-  "type": "module",
   "private": true,
+  "description": "Marketing feedback loop plugin for OpenClaw",
+  "type": "module",
+  "main": "index.ts",
   "peerDependencies": {
     "openclaw": "*"
   }

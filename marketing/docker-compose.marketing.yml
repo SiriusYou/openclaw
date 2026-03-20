@@ -50,8 +50,8 @@ services:
       OPENCLAW_BROWSER_HEADLESS: 0
       OPENCLAW_BROWSER_ENABLE_NOVNC: 1
     ports:
-      - "127.0.0.1:9222:9222"    # CDP (agent connects here)
-      - "127.0.0.1:6080:6080"    # noVNC (human observation)
+      - "127.0.0.1:9222:9222" # CDP (agent connects here)
+      - "127.0.0.1:6080:6080" # noVNC (human observation)
     tmpfs:
       - /tmp:noexec,nosuid,size=512m
 

@@ -71,8 +71,8 @@ Before starting any phase, load context:
 1. Generate campaign brief from selected concept
 2. Define: objective, audience segments, channels, timeline, budget, KPIs
 3. **Validate required fields**: confirm `channel` and `recipients` are explicitly specified in the brief. If either is missing, STOP and return an error listing the missing fields. Do NOT proceed to Phase 3.
-4. Run `competitor-monitor` if competitive positioning is a factor
-5. Optionally use `marketing-strategy-pmm` for GTM framing
+4. If competitive positioning is a factor, note it in the brief (optional extension — `competitor-monitor` not yet implemented)
+5. If GTM framing is needed, incorporate positioning directly in the brief (optional extension — `marketing-strategy-pmm` not yet implemented)
 
 **Gate**: Brief complete with measurable KPIs AND `channel` + `recipients` specified? → Proceed to Phase 3
 **Fail**: If `channel` or `recipients` missing → return error: `"PLAN validation failed: missing fields: <list>. Specify these before advancing to CREATE."`
@@ -132,7 +132,7 @@ Bonus (skip if not ready, note reason in weekly-status):
 
 **Skills**: `weekly-summary` + `campaign-diagnosis`
 
-1. **Retrieve click data** [if short links configured]: pull click statistics from the short link dashboard for all campaign short links. Record human clicks (bot-filtered), geographic breakdown, and referrer sources in `marketing/status/weekly-status.md`. If no short links were used (`no_tracking`), skip this step and note in weekly-status.
+1. **Retrieve click data** [if short links configured]: pull click statistics from the short link dashboard for all campaign short links. Record human clicks (bot-filtered), geographic breakdown, and referrer sources in `status/weekly-status.md` (workspace-relative). If no short links were used (`no_tracking`), skip this step and note in weekly-status.
 2. Run `weekly-summary` to capture performance snapshot (include click data from step 1 if available)
 3. Compare actuals vs brief KPIs
 4. If underperforming: run `campaign-diagnosis` for root cause analysis

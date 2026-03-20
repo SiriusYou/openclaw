@@ -108,18 +108,18 @@
 
 OpenClaw provides 3 container images + 3 deployment targets out of the box:
 
-| Container | Base Image | Size | Purpose |
-|-----------|-----------|------|---------|
-| `Dockerfile` | node:22-bookworm | ~1.5GB | Production Gateway (main process) |
-| `Dockerfile.sandbox` | debian:bookworm-slim | ~200MB | Agent tool execution isolation |
+| Container                    | Base Image           | Size   | Purpose                               |
+| ---------------------------- | -------------------- | ------ | ------------------------------------- |
+| `Dockerfile`                 | node:22-bookworm     | ~1.5GB | Production Gateway (main process)     |
+| `Dockerfile.sandbox`         | debian:bookworm-slim | ~200MB | Agent tool execution isolation        |
 | `Dockerfile.sandbox-browser` | debian:bookworm-slim | ~800MB | Browser automation (Chromium + noVNC) |
 
-| Deployment Target | Config File | Public Exposure | Best For |
-|-------------------|------------|-----------------|----------|
-| Docker Compose (local) | `docker-compose.yml` | No (loopback) | Development & single-server |
-| Fly.io (public) | `fly.toml` | Yes (HTTPS) | Public-facing with auto-TLS |
-| Fly.io (private) | `fly.private.toml` | No | Outbound-only, hidden from scanners |
-| Render.com | `render.yaml` | Yes | Quick deploy, starter plan |
+| Deployment Target      | Config File          | Public Exposure | Best For                            |
+| ---------------------- | -------------------- | --------------- | ----------------------------------- |
+| Docker Compose (local) | `docker-compose.yml` | No (loopback)   | Development & single-server         |
+| Fly.io (public)        | `fly.toml`           | Yes (HTTPS)     | Public-facing with auto-TLS         |
+| Fly.io (private)       | `fly.private.toml`   | No              | Outbound-only, hidden from scanners |
+| Render.com             | `render.yaml`        | Yes             | Quick deploy, starter plan          |
 
 #### Recommended: Staged Container Evolution
 
@@ -131,15 +131,15 @@ Docker Compose     →     + Tailscale         →     Fly.io (private)
 
 **Decision rationale:**
 
-| Criteria | Docker Compose | + Tailscale | Fly.io Private | Kubernetes |
-|----------|---------------|-------------|----------------|------------|
-| Complexity | Low | Low-Medium | Medium | High |
-| Security | High (loopback) | Very High (WireGuard) | High (no public IP) | High |
-| Availability | Single machine | Single + remote | Cloud 7x24 | Multi-node |
-| Scalability | None | None | Limited | Strong |
-| Cost | $0 | $0 | ~$10-30/mo | High |
-| OpenClaw support | Native | Native (`--bind tailnet`) | Native (fly.toml) | No Helm charts |
-| **Recommendation** | **Start here** | **Team phase** | **Production** | **Not recommended** |
+| Criteria           | Docker Compose  | + Tailscale               | Fly.io Private      | Kubernetes          |
+| ------------------ | --------------- | ------------------------- | ------------------- | ------------------- |
+| Complexity         | Low             | Low-Medium                | Medium              | High                |
+| Security           | High (loopback) | Very High (WireGuard)     | High (no public IP) | High                |
+| Availability       | Single machine  | Single + remote           | Cloud 7x24          | Multi-node          |
+| Scalability        | None            | None                      | Limited             | Strong              |
+| Cost               | $0              | $0                        | ~$10-30/mo          | High                |
+| OpenClaw support   | Native          | Native (`--bind tailnet`) | Native (fly.toml)   | No Helm charts      |
+| **Recommendation** | **Start here**  | **Team phase**            | **Production**      | **Not recommended** |
 
 ### 0.2 Build Container Images
 
@@ -214,19 +214,19 @@ Create `~/.openclaw/config.json5`:
 {
   // --- Gateway Security ---
   gateway: {
-    bind: "loopback",                    // NEVER "lan" or "0.0.0.0" unless Tailscale
+    bind: "loopback", // NEVER "lan" or "0.0.0.0" unless Tailscale
     port: 18789,
-    token: "${OPENCLAW_GATEWAY_TOKEN}",  // openssl rand -hex 32
+    token: "${OPENCLAW_GATEWAY_TOKEN}", // openssl rand -hex 32
     trustedProxies: [],
     tls: {
-      enabled: false,                    // Enable when remote access needed
+      enabled: false, // Enable when remote access needed
     },
   },
 
   // --- Logging & Diagnostics ---
   logging: {
     level: "info",
-    redactSensitive: true,               // Prevent API key leaks in logs
+    redactSensitive: true, // Prevent API key leaks in logs
   },
   diagnostics: {
     enabled: true,
@@ -343,7 +343,7 @@ services:
     tty: true
     init: true
     entrypoint: ["node", "openclaw.mjs"]
-    profiles: ["cli"]                    # Only start on demand
+    profiles: ["cli"] # Only start on demand
 
   # --- Tool Execution Sandbox ---
   sandbox:
@@ -367,8 +367,8 @@ services:
       OPENCLAW_BROWSER_HEADLESS: 0
       OPENCLAW_BROWSER_ENABLE_NOVNC: 1
     ports:
-      - "127.0.0.1:9222:9222"           # CDP (agent connects here)
-      - "127.0.0.1:6080:6080"           # noVNC (human observation)
+      - "127.0.0.1:9222:9222" # CDP (agent connects here)
+      - "127.0.0.1:6080:6080" # noVNC (human observation)
     tmpfs:
       - /tmp:noexec,nosuid,size=512m
 
@@ -379,7 +379,7 @@ services:
       - ${OPENCLAW_WORKSPACE_DIR}:/workspaces
     working_dir: /opt/skill_seekers
     command: ["python", "-m", "skill_seekers.mcp.server_fastmcp"]
-    profiles: ["ingest"]                 # Only start on demand
+    profiles: ["ingest"] # Only start on demand
 
 volumes:
   openclaw-config:
@@ -388,16 +388,16 @@ volumes:
 
 ### 0.7 Container Security Hardening
 
-| Parameter | Effect | Applied To |
-|-----------|--------|-----------|
-| `read_only: true` | Filesystem immutable, prevents malicious writes | sandbox, browser |
-| `cap_drop: ALL` | Remove all Linux capabilities, prevents escape | All containers |
-| `tmpfs` + `noexec` | Temp dir cannot execute binaries | All containers |
-| `127.0.0.1:port` | Ports only reachable from host | gateway, browser |
-| `init: true` | Proper PID 1 signal handling (graceful shutdown) | gateway, cli |
-| `USER node/sandbox` | Non-root execution | All (built into images) |
-| `healthcheck` | Auto-detect gateway failures | gateway |
-| `profiles: ["cli"]` | CLI container doesn't auto-start | cli, ingest |
+| Parameter           | Effect                                           | Applied To              |
+| ------------------- | ------------------------------------------------ | ----------------------- |
+| `read_only: true`   | Filesystem immutable, prevents malicious writes  | sandbox, browser        |
+| `cap_drop: ALL`     | Remove all Linux capabilities, prevents escape   | All containers          |
+| `tmpfs` + `noexec`  | Temp dir cannot execute binaries                 | All containers          |
+| `127.0.0.1:port`    | Ports only reachable from host                   | gateway, browser        |
+| `init: true`        | Proper PID 1 signal handling (graceful shutdown) | gateway, cli            |
+| `USER node/sandbox` | Non-root execution                               | All (built into images) |
+| `healthcheck`       | Auto-detect gateway failures                     | gateway                 |
+| `profiles: ["cli"]` | CLI container doesn't auto-start                 | cli, ingest             |
 
 ### 0.8 Start & Verify
 
@@ -430,6 +430,7 @@ git add . && git commit -m "init evolved skills repo"
 ```
 
 **Deliverables:**
+
 - [ ] 3 Docker images built (gateway, sandbox, sandbox-browser)
 - [ ] `docker-compose.marketing.yml` created and tested
 - [ ] Workspace directories created
@@ -468,25 +469,14 @@ Add to `~/.openclaw/config.json5`:
           primary: "claude-sonnet-4-5-20250929",
           fallbacks: ["claude-opus-4-6"],
         },
-        skills: [
-          "clawhub",
-          "skill-from-masters",
-          "search-skill",
-          "skill-from-notebook",
-        ],
+        skills: ["clawhub", "skill-from-masters", "search-skill", "skill-from-notebook"],
         subagents: {
           allowAgents: ["content-writer", "analyst"],
           model: "claude-sonnet-4-5-20250929",
         },
         tools: {
           policy: "allowlist",
-          allowlist: [
-            "memory_search",
-            "memory_get",
-            "sessions_spawn",
-            "clawhub",
-            "group:web",
-          ],
+          allowlist: ["memory_search", "memory_get", "sessions_spawn", "clawhub", "group:web"],
         },
         memorySearch: { enabled: true },
         groupChat: {
@@ -504,11 +494,7 @@ Add to `~/.openclaw/config.json5`:
         skills: ["content-calendar", "seo-analyzer"],
         tools: {
           policy: "allowlist",
-          allowlist: [
-            "memory_search",
-            "memory_get",
-            "group:web",
-          ],
+          allowlist: ["memory_search", "memory_get", "group:web"],
         },
         memorySearch: { enabled: true },
       },
@@ -620,29 +606,36 @@ Create `workspaces/marketing/MEMORY.md`:
 # Marketing Strategy Knowledge Base
 
 ## Current Objectives
+
 - [To be filled after first strategy session]
 
 ## Brand Voice Guidelines
+
 - [Import from existing brand docs]
 
 ## Target Audiences
+
 - [Define personas]
 
 ## Active Campaigns
+
 | Campaign | Channel | Status | Start | KPIs |
-|----------|---------|--------|-------|------|
+| -------- | ------- | ------ | ----- | ---- |
 
 ## Lessons Learned
+
 | Date | Campaign | What Worked | What Didn't | Action |
-|------|----------|-------------|-------------|--------|
+| ---- | -------- | ----------- | ----------- | ------ |
 
 ## Skill Effectiveness
+
 | Skill | Uses | Success Rate | Notes |
-|-------|------|-------------|-------|
+| ----- | ---- | ------------ | ----- |
 
 ## Competitor Intelligence
+
 | Competitor | Last Checked | Key Changes | Our Response |
-|------------|-------------|-------------|-------------|
+| ---------- | ------------ | ----------- | ------------ |
 ```
 
 ### 1.5 Validation
@@ -667,6 +660,7 @@ $COMPOSE agent --id marketing-orchestrator \
 ```
 
 **Deliverables:**
+
 - [ ] 3 agents configured (orchestrator, content-writer, analyst)
 - [ ] Analyst agent sandboxed in browser container
 - [ ] Routing bindings set for Slack/Telegram/Discord
@@ -798,6 +792,7 @@ metadata:
 ## Recording Results
 
 Update memory with test record:
+
 - Test ID, date, hypothesis
 - Variants with descriptions
 - Channel, audience segment
@@ -820,10 +815,17 @@ Update memory with test record:
   id: "marketing-orchestrator",
   skills: [
     // Meta
-    "clawhub", "skill-from-masters", "search-skill", "skill-from-notebook",
+    "clawhub",
+    "skill-from-masters",
+    "search-skill",
+    "skill-from-notebook",
     // Core
-    "campaign-brief", "content-ab-test", "email-campaign",
-    "social-scheduler", "seo-analyzer", "content-calendar",
+    "campaign-brief",
+    "content-ab-test",
+    "email-campaign",
+    "social-scheduler",
+    "seo-analyzer",
+    "content-calendar",
   ],
 }
 ```
@@ -846,6 +848,7 @@ docker compose -f docker-compose.marketing.yml run --rm openclaw-cli agent \
 ```
 
 **Deliverables:**
+
 - [ ] 4 meta-skills installed (skill-from-masters suite)
 - [ ] 5+ marketing skills from ClawHub installed
 - [ ] skills.sh skills installed
@@ -909,15 +912,19 @@ metadata:
 # Skill Seekers Knowledge Ingestion
 
 ## Scrape Documentation Website
+
 skill-seekers scrape --url <URL> --output ./memory/ --format markdown
 
 ## Analyze GitHub Repository
+
 skill-seekers github --repo <owner/repo> --output ./memory/ --format markdown
 
 ## Process PDF
+
 skill-seekers pdf --input <file.pdf> --output ./memory/ --format markdown
 
 ## Notes
+
 - Output to agent's memory/ directory for automatic indexing
 - Use --format markdown for OpenClaw memory compatibility
 - Large sources: use --chunk-size 1000 for optimal RAG chunking
@@ -995,6 +1002,7 @@ skill-seekers scrape --url https://competitor.com/docs \
 ```
 
 **Deliverables:**
+
 - [ ] skill_seekers running in Docker container (MCP or CLI)
 - [ ] Initial knowledge ingested (3+ sources)
 - [ ] Memory indexing configured
@@ -1036,8 +1044,14 @@ export default {
     // --- Detect feedback messages and tag campaigns ---
     api.on("message_received", async (event, ctx) => {
       const text = event.text?.toLowerCase() ?? "";
-      const feedbackKeywords = ["worked well", "didn't work", "great results",
-        "poor performance", "feedback:", "learnings:"];
+      const feedbackKeywords = [
+        "worked well",
+        "didn't work",
+        "great results",
+        "poor performance",
+        "feedback:",
+        "learnings:",
+      ];
 
       if (feedbackKeywords.some((kw) => text.includes(kw))) {
         api.logger.info("feedback", `Campaign feedback detected: ${text.slice(0, 200)}`);
@@ -1172,6 +1186,7 @@ Bi-weekly:
 ```
 
 **Deliverables:**
+
 - [ ] marketing-feedback plugin created and registered
 - [ ] skill-audit plugin created and registered
 - [ ] 3 Cron jobs configured (daily/weekly/bi-weekly)
@@ -1188,12 +1203,7 @@ Bi-weekly:
 {
   diagnostics: {
     enabled: true,
-    flags: [
-      "gateway.*",
-      "session.*",
-      "webhook.*",
-      "agent.*",
-    ],
+    flags: ["gateway.*", "session.*", "webhook.*", "agent.*"],
   },
   logging: {
     level: "info",
@@ -1234,18 +1244,18 @@ Bi-weekly:
       {
         id: "marketing-orchestrator",
         model: {
-          primary: "claude-sonnet-4-5-20250929",  // ~$3/1M input, $15/1M output
-          fallbacks: ["claude-opus-4-6"],           // ~$15/1M input, $75/1M output
+          primary: "claude-sonnet-4-5-20250929", // ~$3/1M input, $15/1M output
+          fallbacks: ["claude-opus-4-6"], // ~$15/1M input, $75/1M output
         },
       },
       {
         id: "content-writer",
-        model: "claude-sonnet-4-5-20250929",       // Content gen = Sonnet sufficient
+        model: "claude-sonnet-4-5-20250929", // Content gen = Sonnet sufficient
       },
       {
         id: "analyst",
         model: {
-          primary: "claude-opus-4-6",              // Deep analysis = Opus
+          primary: "claude-opus-4-6", // Deep analysis = Opus
           fallbacks: ["claude-sonnet-4-5-20250929"],
         },
       },
@@ -1264,16 +1274,17 @@ Bi-weekly:
 
 ### 5.4 Key Metrics to Track
 
-| Metric | Source | Alert Threshold |
-|--------|--------|----------------|
-| Daily token spend | session-cost-usage | > $20/day |
-| Agent latency p95 | diagnostic-events | > 30s |
-| Stuck sessions | diagnostic heartbeat | > 120s |
-| Failed tool calls | after_tool_call hook | > 5/hour |
-| Skill usage count | marketing-feedback | skill unused > 2 weeks |
-| Model fallback rate | model-fallback logs | > 10% fallbacks |
+| Metric              | Source               | Alert Threshold        |
+| ------------------- | -------------------- | ---------------------- |
+| Daily token spend   | session-cost-usage   | > $20/day              |
+| Agent latency p95   | diagnostic-events    | > 30s                  |
+| Stuck sessions      | diagnostic heartbeat | > 120s                 |
+| Failed tool calls   | after_tool_call hook | > 5/hour               |
+| Skill usage count   | marketing-feedback   | skill unused > 2 weeks |
+| Model fallback rate | model-fallback logs  | > 10% fallbacks        |
 
 **Deliverables:**
+
 - [ ] Diagnostics enabled with all relevant flags
 - [ ] Daily cost report Cron running
 - [ ] Model assignments optimized per agent role
@@ -1346,6 +1357,7 @@ docker compose -f docker-compose.marketing.yml up -d openclaw-gateway
 ```
 
 **Deliverables:**
+
 - [ ] Browser tools verified in sandbox container
 - [ ] Daily competitor watch running
 - [ ] Weekly SEO audit running
@@ -1386,7 +1398,7 @@ docker compose -f docker-compose.marketing.yml up -d openclaw-gateway
         id: "marketing-orchestrator",
         heartbeat: {
           enabled: true,
-          intervalMs: 300000,  // 5 minutes
+          intervalMs: 300000, // 5 minutes
         },
       },
     ],
@@ -1470,6 +1482,7 @@ docker compose -f docker-compose.marketing.yml ps
 ```
 
 **Deliverables:**
+
 - [ ] External channels unlocked with send policy
 - [ ] Heartbeat monitoring active
 - [ ] Content pipeline Cron running daily
@@ -1602,6 +1615,7 @@ fly wireguard create
 ```
 
 Fly.io specs:
+
 - VM: `shared-cpu-2x`, 2048MB RAM
 - Storage: Persistent volume at `/data`
 - Auto-restart on crash
@@ -1618,6 +1632,7 @@ For teams wanting the simplest deployment:
 ```
 
 Render specs:
+
 - Starter plan (free tier available)
 - Health check at `/health`
 - 1GB persistent disk
@@ -1626,18 +1641,18 @@ Render specs:
 
 ### 8.4 Deployment Comparison
 
-| Criteria | Docker Compose | Fly.io Private | Render.com |
-|----------|---------------|----------------|------------|
-| Setup time | 30 min | 15 min | 10 min |
-| Monthly cost | $0 (own hardware) | ~$10-30 | $0-25 |
-| Uptime | Depends on host | 99.9%+ | 99.5%+ |
-| Auto-restart | `unless-stopped` | Built-in | Built-in |
-| Auto-TLS | No (manual) | Yes (Let's Encrypt) | Yes |
-| Public exposure | Loopback only | Optional (private default) | Yes |
-| Persistent storage | Docker volumes | Fly volumes | 1GB disk |
-| Browser sandbox | Yes (separate container) | No (single container) | No |
-| Resource limits | Configurable | shared-cpu-2x / 2GB | Plan-dependent |
-| Team access | Tailscale | fly proxy / WireGuard | Public URL |
+| Criteria           | Docker Compose           | Fly.io Private             | Render.com     |
+| ------------------ | ------------------------ | -------------------------- | -------------- |
+| Setup time         | 30 min                   | 15 min                     | 10 min         |
+| Monthly cost       | $0 (own hardware)        | ~$10-30                    | $0-25          |
+| Uptime             | Depends on host          | 99.9%+                     | 99.5%+         |
+| Auto-restart       | `unless-stopped`         | Built-in                   | Built-in       |
+| Auto-TLS           | No (manual)              | Yes (Let's Encrypt)        | Yes            |
+| Public exposure    | Loopback only            | Optional (private default) | Yes            |
+| Persistent storage | Docker volumes           | Fly volumes                | 1GB disk       |
+| Browser sandbox    | Yes (separate container) | No (single container)      | No             |
+| Resource limits    | Configurable             | shared-cpu-2x / 2GB        | Plan-dependent |
+| Team access        | Tailscale                | fly proxy / WireGuard      | Public URL     |
 
 ### 8.5 Production Monitoring
 
@@ -1656,6 +1671,7 @@ fly ssh console -a my-marketing-agent
 ```
 
 **Deliverables:**
+
 - [ ] Production Docker Compose validated with resource limits
 - [ ] OR Fly.io private deployment running
 - [ ] OR Render.com deployment running
@@ -1698,62 +1714,62 @@ fly ssh console -a my-marketing-agent
 
 See individual phases above. The full config combines:
 
-| Section | Phase | Purpose |
-|---------|-------|---------|
-| `gateway.*` | 0 | Network security |
-| `logging.*`, `diagnostics.*` | 0, 5 | Observability |
-| `agents.list[]` | 1 | Agent definitions |
-| `bindings[]` | 1 | Channel routing |
-| `channels.*` | 1 | Channel connections |
-| `memory.*` | 3 | Knowledge indexing |
-| `cron.jobs[]` | 3, 4, 5, 6, 7 | Automation schedule |
-| `tools.mcp[]` | 3 | skill_seekers MCP |
-| `browser.*` | 6 | Browser automation |
-| `session.sendPolicy` | 0, 7 | Permission gates |
-| `models.authProfiles[]` | 5 | Key rotation |
+| Section                      | Phase         | Purpose             |
+| ---------------------------- | ------------- | ------------------- |
+| `gateway.*`                  | 0             | Network security    |
+| `logging.*`, `diagnostics.*` | 0, 5          | Observability       |
+| `agents.list[]`              | 1             | Agent definitions   |
+| `bindings[]`                 | 1             | Channel routing     |
+| `channels.*`                 | 1             | Channel connections |
+| `memory.*`                   | 3             | Knowledge indexing  |
+| `cron.jobs[]`                | 3, 4, 5, 6, 7 | Automation schedule |
+| `tools.mcp[]`                | 3             | skill_seekers MCP   |
+| `browser.*`                  | 6             | Browser automation  |
+| `session.sendPolicy`         | 0, 7          | Permission gates    |
+| `models.authProfiles[]`      | 5             | Key rotation        |
 
 ### Cron Job Summary
 
-| ID | Agent | Schedule | Purpose |
-|----|-------|----------|---------|
-| weekly-knowledge-ingest | orchestrator | Sun 03:00 | Refresh knowledge sources |
-| daily-morning-brief | orchestrator | Daily 09:00 | Strategy + priorities |
-| weekly-strategy-reflection | analyst | Mon 10:00 | Performance review |
-| biweekly-skill-evolution | orchestrator | 1st, 15th 14:00 | Create/improve skills |
-| daily-cost-report | analyst | Daily 18:00 | Budget monitoring |
-| daily-competitor-watch | analyst | Daily 08:00 | Competitive intel |
-| weekly-seo-audit | analyst | Wed 11:00 | SEO analysis |
-| daily-content-pipeline | content-writer | Mon-Fri 14:00 | Content generation |
-| skill-discovery | orchestrator | Mon 10:00 | Find new skills |
+| ID                         | Agent          | Schedule        | Purpose                   |
+| -------------------------- | -------------- | --------------- | ------------------------- |
+| weekly-knowledge-ingest    | orchestrator   | Sun 03:00       | Refresh knowledge sources |
+| daily-morning-brief        | orchestrator   | Daily 09:00     | Strategy + priorities     |
+| weekly-strategy-reflection | analyst        | Mon 10:00       | Performance review        |
+| biweekly-skill-evolution   | orchestrator   | 1st, 15th 14:00 | Create/improve skills     |
+| daily-cost-report          | analyst        | Daily 18:00     | Budget monitoring         |
+| daily-competitor-watch     | analyst        | Daily 08:00     | Competitive intel         |
+| weekly-seo-audit           | analyst        | Wed 11:00       | SEO analysis              |
+| daily-content-pipeline     | content-writer | Mon-Fri 14:00   | Content generation        |
+| skill-discovery            | orchestrator   | Mon 10:00       | Find new skills           |
 
 ### Container Image Summary
 
-| Image | Base | Size | User | Ports | Purpose |
-|-------|------|------|------|-------|---------|
-| `openclaw:local` | node:22-bookworm | ~1.5GB | node (1000) | 18789 | Gateway + agents |
-| `openclaw-sandbox:bookworm-slim` | debian:bookworm-slim | ~200MB | sandbox | none | Tool execution |
-| `openclaw-sandbox-browser:bookworm-slim` | debian:bookworm-slim | ~800MB | sandbox | 9222, 5900, 6080 | Browser automation |
-| `python:3.12-slim` | python:3.12-slim | ~150MB | root | none | skill_seekers MCP |
+| Image                                    | Base                 | Size   | User        | Ports            | Purpose            |
+| ---------------------------------------- | -------------------- | ------ | ----------- | ---------------- | ------------------ |
+| `openclaw:local`                         | node:22-bookworm     | ~1.5GB | node (1000) | 18789            | Gateway + agents   |
+| `openclaw-sandbox:bookworm-slim`         | debian:bookworm-slim | ~200MB | sandbox     | none             | Tool execution     |
+| `openclaw-sandbox-browser:bookworm-slim` | debian:bookworm-slim | ~800MB | sandbox     | 9222, 5900, 6080 | Browser automation |
+| `python:3.12-slim`                       | python:3.12-slim     | ~150MB | root        | none             | skill_seekers MCP  |
 
 ---
 
 ## Appendix C: Risk Register
 
-| # | Risk | Likelihood | Impact | Mitigation | Phase |
-|---|------|-----------|--------|------------|-------|
-| 1 | Malicious skill installation | Medium | High | awesome whitelist + skill-audit hook | 2, 4 |
-| 2 | API cost overrun | Medium | Medium | Daily cost report + budget alerts | 5 |
-| 3 | Agent sends inappropriate content | Low | High | send policy + human review Slack channel | 0, 7 |
-| 4 | Prompt injection via channel messages | Medium | Medium | tool allowlists + mention-gating | 1 |
-| 5 | Gateway exposed to internet | Low | Critical | loopback binding + TLS + Tailscale | 0 |
-| 6 | API key leak in logs | Low | High | redactSensitive: true | 0 |
-| 7 | Evolved skill quality degradation | Medium | Medium | git tracking + periodic human review | 4 |
-| 8 | Single point of failure (one API key) | Medium | Medium | auth profile rotation (2+ keys) | 5 |
-| 9 | Memory bloat (too much indexed data) | Low | Low | retention policy + periodic cleanup | 3 |
-| 10 | Channel rate limiting (Telegram/Slack) | Medium | Low | Outbound throttling + fallback channels | 7 |
-| 11 | Container escape via sandbox | Low | Critical | read_only + cap_drop ALL + non-root | 0 |
-| 12 | Docker volume data loss | Low | High | Daily backup script + volume snapshots | 7 |
-| 13 | Browser sandbox resource exhaustion | Medium | Low | Resource limits (1GB/1CPU) + restart policy | 8 |
+| #   | Risk                                   | Likelihood | Impact   | Mitigation                                  | Phase |
+| --- | -------------------------------------- | ---------- | -------- | ------------------------------------------- | ----- |
+| 1   | Malicious skill installation           | Medium     | High     | awesome whitelist + skill-audit hook        | 2, 4  |
+| 2   | API cost overrun                       | Medium     | Medium   | Daily cost report + budget alerts           | 5     |
+| 3   | Agent sends inappropriate content      | Low        | High     | send policy + human review Slack channel    | 0, 7  |
+| 4   | Prompt injection via channel messages  | Medium     | Medium   | tool allowlists + mention-gating            | 1     |
+| 5   | Gateway exposed to internet            | Low        | Critical | loopback binding + TLS + Tailscale          | 0     |
+| 6   | API key leak in logs                   | Low        | High     | redactSensitive: true                       | 0     |
+| 7   | Evolved skill quality degradation      | Medium     | Medium   | git tracking + periodic human review        | 4     |
+| 8   | Single point of failure (one API key)  | Medium     | Medium   | auth profile rotation (2+ keys)             | 5     |
+| 9   | Memory bloat (too much indexed data)   | Low        | Low      | retention policy + periodic cleanup         | 3     |
+| 10  | Channel rate limiting (Telegram/Slack) | Medium     | Low      | Outbound throttling + fallback channels     | 7     |
+| 11  | Container escape via sandbox           | Low        | Critical | read_only + cap_drop ALL + non-root         | 0     |
+| 12  | Docker volume data loss                | Low        | High     | Daily backup script + volume snapshots      | 7     |
+| 13  | Browser sandbox resource exhaustion    | Medium     | Low      | Resource limits (1GB/1CPU) + restart policy | 8     |
 
 ---
 
@@ -1761,14 +1777,14 @@ See individual phases above. The full config combines:
 
 ### When to Use Each Container
 
-| Scenario | Container(s) | Why |
-|----------|-------------|-----|
-| Development & testing | gateway + cli | Minimal setup, fast iteration |
-| Adding browser automation | + sandbox-browser | Isolated Chromium, noVNC for debugging |
-| Running agent tools safely | + sandbox | Non-root, read-only, capabilities dropped |
-| Knowledge ingestion | + skill-seekers | Python runtime for MCP server |
-| Team collaboration | + Tailscale sidecar | Encrypted remote access, no public exposure |
-| Production 7x24 | Fly.io private | Auto-restart, persistent volumes, no public IP |
+| Scenario                   | Container(s)        | Why                                            |
+| -------------------------- | ------------------- | ---------------------------------------------- |
+| Development & testing      | gateway + cli       | Minimal setup, fast iteration                  |
+| Adding browser automation  | + sandbox-browser   | Isolated Chromium, noVNC for debugging         |
+| Running agent tools safely | + sandbox           | Non-root, read-only, capabilities dropped      |
+| Knowledge ingestion        | + skill-seekers     | Python runtime for MCP server                  |
+| Team collaboration         | + Tailscale sidecar | Encrypted remote access, no public exposure    |
+| Production 7x24            | Fly.io private      | Auto-restart, persistent volumes, no public IP |
 
 ### Container Lifecycle
 

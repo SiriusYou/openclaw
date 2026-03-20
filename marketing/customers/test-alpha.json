@@ -20,8 +20,21 @@
     "campaign-lifecycle",
     "campaign-diagnosis",
     "structured-brainstorm",
-    "content-ab-test"
+    "content-ab-test",
+    "content-repurposing",
+    "campaign-decision-gate",
+    "weekly-summary",
+    "campaign-retrospective"
   ],
+  "reporting": {
+    "timezone": "Asia/Shanghai",
+    "delivery": {
+      "channel": "telegram",
+      "target": "8113291785"
+    },
+    "weekly": { "cron": "0 10 * * 1" },
+    "monthly": { "cron": "0 10 1 * *" }
+  },
   "sandbox": {
     "mode": "off"
   },

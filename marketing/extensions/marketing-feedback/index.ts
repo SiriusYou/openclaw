@@ -1,10 +1,7 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 
 // Canonical orchestrator ID is "main"; keep legacy alias for backward compat
-const ORCHESTRATOR_IDS: ReadonlySet<string> = new Set([
-  "main",
-  "marketing-orchestrator",
-]);
+const ORCHESTRATOR_IDS: ReadonlySet<string> = new Set(["main", "marketing-orchestrator"]);
 
 // Fixed set (not prefix match) to prevent ID drift; add new marketing agents here
 const TRACKED_AGENT_IDS: ReadonlySet<string> = new Set([
@@ -34,9 +31,7 @@ export default {
       const agentId = ctx.agentId ?? "";
       if (!TRACKED_AGENT_IDS.has(agentId)) return;
 
-      const status = event.success
-        ? "success"
-        : `failed: ${event.error ?? "unknown"}`;
+      const status = event.success ? "success" : `failed: ${event.error ?? "unknown"}`;
 
       api.logger.info(
         "feedback",
@@ -49,10 +44,7 @@ export default {
       const content = event.content.toLowerCase();
 
       if (FEEDBACK_KEYWORDS.some((kw) => content.includes(kw))) {
-        api.logger.info(
-          "feedback",
-          `Campaign feedback detected: ${content.slice(0, 200)}`,
-        );
+        api.logger.info("feedback", `Campaign feedback detected: ${content.slice(0, 200)}`);
       }
     });
 

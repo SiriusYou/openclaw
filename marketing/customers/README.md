@@ -14,20 +14,29 @@ profile B's `agents/main/`.
 
 ## Fields
 
-| Field                     | Type     | Description                                               |
-| ------------------------- | -------- | --------------------------------------------------------- |
-| `customerId`              | string   | Unique identifier (alphanumeric + hyphen)                 |
-| `status`                  | enum     | `template`, `active`, `provisioned`, `paused`, `disabled` |
-| `port`                    | number   | Gateway port (unique per customer, start at 18790)        |
-| `channels`                | string[] | Enabled channel plugins                                   |
-| `telegramBotToken`        | object   | Token reference (never plaintext in this file)            |
-| `brandName`               | string   | Customer's brand name                                     |
-| `audience`                | string   | Target audience description                               |
-| `modelProfile`            | object   | LLM model configuration (primary + fallbacks)             |
-| `skills`                  | string[] | Enabled skills for this customer                          |
-| `sandbox`                 | object   | Sandbox configuration (default: off)                      |
-| `tools`                   | object   | Tool access control                                       |
-| `hostBoundSkillsDenylist` | string[] | Skills to disable (shared host state)                     |
+| Field                        | Type     | Description                                                                  |
+| ---------------------------- | -------- | ---------------------------------------------------------------------------- |
+| `customerId`                 | string   | Unique identifier (alphanumeric + hyphen)                                    |
+| `status`                     | enum     | `template`, `active`, `provisioned`, `paused`, `disabled`                    |
+| `port`                       | number   | Gateway port (unique per customer, start at 18790)                           |
+| `channels`                   | string[] | Enabled channel plugins                                                      |
+| `telegramBotToken`           | object   | Token reference (never plaintext in this file)                               |
+| `brandName`                  | string   | Customer's brand name                                                        |
+| `audience`                   | string   | Target audience description                                                  |
+| `modelProfile`               | object   | LLM model configuration (primary + fallbacks)                                |
+| `skills`                     | string[] | Enabled skills for this customer                                             |
+| `sandbox`                    | object   | Sandbox configuration (default: off)                                         |
+| `tools`                      | object   | Tool access control                                                          |
+| `hostBoundSkillsDenylist`    | string[] | Skills to disable (shared host state)                                        |
+| `reporting`                  | object   | Reporting configuration (optional)                                           |
+| `reporting.timezone`         | string   | IANA timezone for cron scheduling (default: Asia/Shanghai)                   |
+| `reporting.delivery`         | object   | Delivery config                                                              |
+| `reporting.delivery.channel` | string   | Delivery channel (default: telegram)                                         |
+| `reporting.delivery.target`  | string   | Delivery target (e.g. Telegram chat ID). **Required** — fail-closed if empty |
+| `reporting.weekly`           | object   | Weekly summary cron config                                                   |
+| `reporting.weekly.cron`      | string   | Cron expression (default: `0 9 * * 1` — Mon 09:00)                           |
+| `reporting.monthly`          | object   | Monthly retrospective cron config                                            |
+| `reporting.monthly.cron`     | string   | Cron expression (default: `0 9 1 * *` — 1st of month)                        |
 
 ## Derived Fields (NOT stored — computed at runtime)
 
@@ -57,3 +66,80 @@ cp example.json acme-corp.json
 # Edit acme-corp.json with customer details
 ../scripts/provision-customer.sh create acme-corp
 ```
+
+---
+
+## Onboarding Checklist
+
+Step-by-step procedure for onboarding a new customer (operator-executed).
+
+### Prerequisites
+
+- [ ] Customer has provided: brand name, target audience, brand voice/tone (optional)
+- [ ] Telegram bot created via @BotFather (record bot username and token)
+- [ ] API keys ready (at least one LLM provider: OpenAI, Google, or OpenRouter)
+- [ ] Unique port allocated (check existing manifests to avoid conflicts)
+
+### Steps
+
+1. **Create manifest**:
+
+   ```bash
+   cp marketing/customers/example.json marketing/customers/acme-corp.json
+   ```
+
+   Edit `acme-corp.json`: set `customerId`, `brandName`, `audience`, `port`, `reporting.delivery.target`.
+
+2. **Provision**:
+
+   ```bash
+   bash marketing/scripts/provision-customer.sh create acme-corp
+   ```
+
+   This creates the state dir, config, workspace, seeds templates, copies skills, and starts the gateway.
+
+3. **Add Telegram bot token**:
+
+   ```bash
+   openclaw --profile acme-corp channels add --channel telegram --token '<BOT_TOKEN>'
+   ```
+
+4. **Add API keys** (edit auth profiles directly):
+
+   ```bash
+   # Edit ~/.openclaw-acme-corp/agents/main/agent/auth-profiles.json
+   # Add provider entries with type: "api_key" and key: "<KEY>"
+   ```
+
+5. **Restart gateway** to apply token and auth changes:
+
+   ```bash
+   openclaw --profile acme-corp daemon restart
+   ```
+
+6. **Verify Telegram pairing**:
+   - Send a message to the bot from Telegram
+   - Bot returns a pairing code (message is NOT processed yet)
+   - Approve: `openclaw --profile acme-corp pairing approve telegram <CODE>`
+   - Send another test message — bot should respond normally
+
+7. **Configure automated reports** (if `reporting` section is in manifest):
+
+   ```bash
+   bash marketing/scripts/configure-customer-crons.sh acme-corp
+   ```
+
+8. **Customize workspace** (optional):
+   - Edit `~/.openclaw-acme-corp/workspaces/marketing/memory/brand-and-audience.md`
+   - Edit `~/.openclaw-acme-corp/workspaces/marketing/SOUL.md`
+
+9. **Run first campaign** (process validation):
+   - Send via Telegram: "Create a campaign brief for [topic]. Use the campaign-lifecycle skill."
+   - Walk through all 7 phases (IDEATE through LEARN)
+   - Verify weekly summary cron fires on next Monday
+
+10. **Delivery confirmation**:
+    - [ ] Bot responds to Telegram messages
+    - [ ] Gateway health: `openclaw --profile acme-corp gateway status --require-rpc`
+    - [ ] Cron jobs listed: `openclaw --profile acme-corp cron list`
+    - [ ] First campaign completed or in progress

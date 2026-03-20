@@ -101,7 +101,8 @@ export default {
           );
           return {
             block: true,
-            blockReason: "Could not determine target paths from patch content. Blocking as safety precaution.",
+            blockReason:
+              "Could not determine target paths from patch content. Blocking as safety precaution.",
           };
         }
         return;
