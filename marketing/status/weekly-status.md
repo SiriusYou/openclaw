@@ -125,3 +125,46 @@ _Fill in each Monday. Keep history for trend tracking._
 2026-03-13: D2 PR-A merged; branch rebased (0 behind); R5 complete (7/7 phases, 5 lessons); timing override documented (operator waived Tue-Thu for self-test); no_tracking documented
 2026-03-13 T8.x assessment: T8.0=PASS, T8.1=PASS, T8.2=PASS (timing deviation noted), T8.3=PASS (5 lessons), T8.4=PASS, T8.5=PASS-with-warning (no_tracking), T8.6=PASS-with-warning (clicks=N/A, engagement=2/2 button paths confirmed; runtime evidence only per D11), T9=Provisional-PASS (evidence refs in T9 section above)
 2026-03-13: D9 FIXED — added groupAllowFrom=["8113291785"] to runtime config; gateway restarted; group send verified (msg_id=315, chat_id=-5234143314, group="Openclaw Dev"); R6 complete (3 knowledge base files); R8 complete (7/7 phases, 3 new lessons); scope=process_validation (timing waiver: Friday evening); DM msg_id=316 + Group msg_id=317; both CTA button paths confirmed; multi-surface infrastructure validated
+
+---
+
+### M3 Live Validation (2026-03-20)
+
+**Customer**: test-alpha (`@biubiujia_bot`, profile: test-alpha, port: 18790)
+**Campaign**: "1% Better Every Build" — one-week developer productivity tips for developer community and tech enthusiasts
+
+**Cron Jobs**:
+| Name | ID | Schedule |
+|------|----|----------|
+| test-alpha-weekly-summary | 47f8c7f2-6b08-4e17-83d1-a96ebce98157 | Mon 10AM Asia/Shanghai |
+| test-alpha-monthly-retrospective | 2aff3e42-fac0-43d9-8313-60d0d7e41567 | 1st 10AM Asia/Shanghai |
+
+**Weekly Summary Delivery**: ✅ Delivered (status: ok, deliveryStatus: delivered, model: gemini-3-pro-preview, session: 64f45577)
+**Weekly Summary Persisted**: ✅ Written to `~/.openclaw-test-alpha/workspaces/marketing/status/weekly-status.md`
+
+**7-Phase Campaign Results**:
+| Phase | Prompt | Telegram msg_id | Result |
+|-------|--------|----------------|--------|
+| 1. IDEATE | Brainstorm 3 concepts | 71 | ✅ 3 concepts (1% Better, Tool Stack, Flow State) |
+| 2. PLAN | Create campaign brief | 74 | ✅ Brief with KPIs, 5-day calendar, UTM strategy |
+| 3. CREATE | Draft content multi-channel | 77 | ✅ 5-day content for Telegram + Twitter |
+| 4. GATE | Decision gate | 85 | ✅ HOLD with evidence checklist |
+| 5. LAUNCH | Launch campaign | 88 | ✅ Launch plan executed |
+| 6. ANALYZE | Weekly performance summary | 91 | ✅ Simulated metrics report |
+| 7. LEARN | Retrospective + lessons | 94 | ✅ If/Then lessons extracted |
+
+**Skills Deployed**: 9/9 (campaign-brief, campaign-decision-gate, campaign-diagnosis, campaign-lifecycle, campaign-retrospective, content-ab-test, content-repurposing, structured-brainstorm, weekly-summary)
+
+**Blockers Resolved**:
+
+- Gate 0: RPC healthy (exit 0) after token sync fix
+- Token mismatch: `gateway.remote.token` was missing after `config set`; fixed by syncing to `auth.token`
+- Delivery target: manifest had wrong chat ID (8113291785 → 7557991790 for @biubiujia_bot)
+- Stale gateway process: port conflict after `daemon restart`; fixed by kill + LaunchAgent respawn
+
+**M3 Acceptance**:
+
+1. ✅ Both crons exist (weekly + monthly)
+2. ✅ Weekly cron run succeeds (status: ok)
+3. ✅ Weekly summary delivered to Telegram and persisted to workspace
+4. ✅ All 7 Telegram phases complete without skill-not-found errors
