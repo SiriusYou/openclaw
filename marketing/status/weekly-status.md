@@ -130,28 +130,28 @@ _Fill in each Monday. Keep history for trend tracking._
 
 ### M3 Live Validation (2026-03-20)
 
-**Customer**: test-alpha (`@biubiujia_bot`, profile: test-alpha, port: 18790)
+**Customer**: test-alpha (profile: test-alpha, port: 18790)
 **Campaign**: "1% Better Every Build" — one-week developer productivity tips for developer community and tech enthusiasts
 
 **Cron Jobs**:
-| Name | ID | Schedule |
-|------|----|----------|
-| test-alpha-weekly-summary | 47f8c7f2-6b08-4e17-83d1-a96ebce98157 | Mon 10AM Asia/Shanghai |
-| test-alpha-monthly-retrospective | 2aff3e42-fac0-43d9-8313-60d0d7e41567 | 1st 10AM Asia/Shanghai |
+| Name | Schedule |
+|------|----------|
+| {id}-weekly-summary | Mon 10AM Asia/Shanghai |
+| {id}-monthly-retrospective | 1st 10AM Asia/Shanghai |
 
-**Weekly Summary Delivery**: ✅ Delivered (status: ok, deliveryStatus: delivered, model: gemini-3-pro-preview, session: 64f45577)
-**Weekly Summary Persisted**: ✅ Written to `~/.openclaw-test-alpha/workspaces/marketing/status/weekly-status.md`
+**Weekly Summary Delivery**: ✅ Delivered (status: ok, deliveryStatus: delivered, model: gemini-3-pro-preview)
+**Weekly Summary Persisted**: ✅ Written to customer workspace `status/weekly-status.md`
 
 **7-Phase Campaign Results**:
-| Phase | Prompt | Telegram msg_id | Result |
-|-------|--------|----------------|--------|
-| 1. IDEATE | Brainstorm 3 concepts | 71 | ✅ 3 concepts (1% Better, Tool Stack, Flow State) |
-| 2. PLAN | Create campaign brief | 74 | ✅ Brief with KPIs, 5-day calendar, UTM strategy |
-| 3. CREATE | Draft content multi-channel | 77 | ✅ 5-day content for Telegram + Twitter |
-| 4. GATE | Decision gate | 85 | ✅ HOLD with evidence checklist |
-| 5. LAUNCH | Launch campaign | 88 | ✅ Launch plan executed |
-| 6. ANALYZE | Weekly performance summary | 91 | ✅ Simulated metrics report |
-| 7. LEARN | Retrospective + lessons | 94 | ✅ If/Then lessons extracted |
+| Phase | Prompt | Result |
+|-------|--------|--------|
+| 1. IDEATE | Brainstorm 3 concepts | ✅ 3 concepts (1% Better, Tool Stack, Flow State) |
+| 2. PLAN | Create campaign brief | ✅ Brief with KPIs, 5-day calendar, UTM strategy |
+| 3. CREATE | Draft content multi-channel | ✅ 5-day content for Telegram + Twitter |
+| 4. GATE | Decision gate | ✅ HOLD with evidence checklist |
+| 5. LAUNCH | Launch campaign | ✅ Launch plan executed |
+| 6. ANALYZE | Weekly performance summary | ✅ Simulated metrics report |
+| 7. LEARN | Retrospective + lessons | ✅ If/Then lessons extracted |
 
 **Skills Deployed**: 9/9 (campaign-brief, campaign-decision-gate, campaign-diagnosis, campaign-lifecycle, campaign-retrospective, content-ab-test, content-repurposing, structured-brainstorm, weekly-summary)
 
@@ -159,7 +159,7 @@ _Fill in each Monday. Keep history for trend tracking._
 
 - Gate 0: RPC healthy (exit 0) after token sync fix
 - Token mismatch: `gateway.remote.token` was missing after `config set`; fixed by syncing to `auth.token`
-- Delivery target: manifest had wrong chat ID (8113291785 → 7557991790 for @biubiujia_bot)
+- Delivery target: manifest had wrong chat ID; fixed by discovering actual ID from session data
 - Stale gateway process: port conflict after `daemon restart`; fixed by kill + LaunchAgent respawn
 
 **M3 Acceptance**:

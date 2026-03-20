@@ -30,7 +30,7 @@
     "timezone": "Asia/Shanghai",
     "delivery": {
       "channel": "telegram",
-      "target": "7557991790"
+      "target": "TELEGRAM_CHAT_ID"
     },
     "weekly": { "cron": "0 10 * * 1" },
     "monthly": { "cron": "0 10 1 * *" }
