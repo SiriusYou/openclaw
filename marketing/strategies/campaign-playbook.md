@@ -94,7 +94,7 @@ All campaigns follow the 7-phase `campaign-lifecycle` skill:
 | Channel          | Status         | Audience         | Limitation                                                      |
 | ---------------- | -------------- | ---------------- | --------------------------------------------------------------- |
 | Telegram DM      | Active         | Single recipient | No broadcast                                                    |
-| Telegram Group   | Active         | Multi-recipient  | D9 fixed 2026-03-13 (groupAllowFrom added); verified msg_id=315 |
+| Telegram Group   | Active         | Multi-recipient  | D9 fixed 2026-03-13 (groupAllowFrom added); group send verified |
 | Telegram Channel | Not configured | Broadcast        | Requires channel creation + bot admin                           |
 | Slack            | Deferred (R7)  | Team workspace   | Not connected                                                   |
 

@@ -45,7 +45,7 @@
 
 ## Open Items Carried Forward
 
-- ~~D9: Telegram groupPolicy~~ Fixed 2026-03-13 (groupAllowFrom added, group send verified msg_id=315)
+- ~~D9: Telegram groupPolicy~~ Fixed 2026-03-13 (groupAllowFrom added, group send verified)
 - D11: Runtime artifact auditability (ephemeral evidence)
 - D3-bonus: Short.io setup (informational)
 - PR-B/C: Config/scripts and plugins/tests merge (branch reduction)
