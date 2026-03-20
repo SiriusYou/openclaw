@@ -145,11 +145,19 @@ afterAll(() => {
 });
 
 beforeEach(() => {
-  // Clear shim state between tests
+  // Clear shim state between tests so each test controls its own gateway state
   for (const f of fs.readdirSync(shimStateDir)) {
     fs.unlinkSync(path.join(shimStateDir, f));
   }
 });
+
+/** Ensure a customer is provisioned (idempotent — skips if state dir exists). */
+function ensureProvisioned(id: string, port: number): void {
+  const stateDir = path.join(tmpDir, `.openclaw-${id}`);
+  if (fs.existsSync(stateDir)) return;
+  createManifest(id, { port });
+  provision(`create ${id} --force`);
+}
 
 // ---------------------------------------------------------------------------
 // #1 + #4: Config/state/workspace isolation
@@ -190,6 +198,8 @@ describe("#1 #4: Config and path isolation", () => {
   });
 
   test("alpha files never reference bravo paths or port", () => {
+    ensureProvisioned("alpha", 18790);
+    ensureProvisioned("bravo", 18791);
     const alphaDir = path.join(tmpDir, ".openclaw-alpha");
 
     function scanDir(dir: string): string {
@@ -215,6 +225,7 @@ describe("#1 #4: Config and path isolation", () => {
   });
 
   test("workspace seed files are created", () => {
+    ensureProvisioned("alpha", 18790);
     const ws = path.join(tmpDir, ".openclaw-alpha/workspaces/marketing");
     expect(fs.existsSync(path.join(ws, "SOUL.md"))).toBe(true);
     expect(fs.existsSync(path.join(ws, "AGENTS.md"))).toBe(true);
@@ -228,6 +239,7 @@ describe("#1 #4: Config and path isolation", () => {
 
 describe("#5: Tool restrictions enforced", () => {
   test("exec security is deny and fs is workspaceOnly", () => {
+    ensureProvisioned("alpha", 18790);
     const config = readConfig("alpha");
     const agent = (
       (config.agents as Record<string, unknown>).list as Array<Record<string, unknown>>
@@ -239,14 +251,15 @@ describe("#5: Tool restrictions enforced", () => {
   });
 
   test("host-bound skills are disabled in config", () => {
+    ensureProvisioned("alpha", 18790);
     const config = readConfig("alpha");
-    const skills = config.skills as
-      | Record<string, Record<string, Record<string, unknown>>>
-      | undefined;
-    if (skills?.entries) {
-      expect(skills.entries["things-mac"]?.enabled).toBe(false);
-      expect(skills.entries["tmux"]?.enabled).toBe(false);
-    }
+    const skills = config.skills as Record<string, Record<string, Record<string, unknown>>>;
+
+    // Fail-closed: skills.entries MUST exist with disabled entries
+    expect(skills).toBeDefined();
+    expect(skills.entries).toBeDefined();
+    expect(skills.entries["things-mac"]?.enabled).toBe(false);
+    expect(skills.entries["tmux"]?.enabled).toBe(false);
   });
 });
 
@@ -256,7 +269,9 @@ describe("#5: Tool restrictions enforced", () => {
 
 describe("#2: Lifecycle isolation", () => {
   test("pausing alpha doesn't affect bravo", () => {
-    // Both should be active from previous create
+    ensureProvisioned("alpha", 18790);
+    ensureProvisioned("bravo", 18791);
+
     let alphaM = readManifest("alpha");
     let bravoM = readManifest("bravo");
     expect(alphaM.status).toBe("active");
@@ -282,7 +297,16 @@ describe("#2: Lifecycle isolation", () => {
   });
 
   test("customer-status.sh --json shows mixed state correctly", () => {
-    // Re-seed shim state: alpha stopped (paused above), bravo running
+    ensureProvisioned("alpha", 18790);
+    ensureProvisioned("bravo", 18791);
+
+    // Set manifest states to simulate pause scenario
+    const alphaManifestPath = path.join(customersDir, "alpha.json");
+    const am = JSON.parse(fs.readFileSync(alphaManifestPath, "utf8"));
+    am.status = "paused";
+    fs.writeFileSync(alphaManifestPath, JSON.stringify(am, null, 2));
+
+    // Seed shim state: alpha stopped, bravo running
     fs.writeFileSync(path.join(shimStateDir, "alpha.state"), "stopped");
     fs.writeFileSync(path.join(shimStateDir, "bravo.state"), "running");
 
@@ -301,6 +325,14 @@ describe("#2: Lifecycle isolation", () => {
   });
 
   test("resume alpha restores active state", () => {
+    ensureProvisioned("alpha", 18790);
+
+    // Set manifest to paused (simulating prior pause)
+    const alphaManifestPath = path.join(customersDir, "alpha.json");
+    const am = JSON.parse(fs.readFileSync(alphaManifestPath, "utf8"));
+    am.status = "paused";
+    fs.writeFileSync(alphaManifestPath, JSON.stringify(am, null, 2));
+
     // Seed shim state so gateway start + status probe succeed
     fs.writeFileSync(path.join(shimStateDir, "alpha.state"), "installed");
 
@@ -316,6 +348,7 @@ describe("#2: Lifecycle isolation", () => {
 
 describe("#6: Conflict detection", () => {
   test("rejects duplicate port", () => {
+    ensureProvisioned("alpha", 18790);
     createManifest("charlie", { port: 18790 }); // same as alpha
     const output = provision("create charlie --force", { expectFail: true });
     expect(output).toContain("conflicts with");
@@ -323,7 +356,7 @@ describe("#6: Conflict detection", () => {
   });
 
   test("rejects existing state dir on create", () => {
-    // alpha state dir exists from earlier tests
+    ensureProvisioned("alpha", 18790);
     createManifest("alpha", { port: 18795, status: "template" });
     const output = provision("create alpha --force", { expectFail: true });
     expect(output).toContain("already exists");
