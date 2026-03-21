@@ -1,0 +1,62 @@
+{
+  "_comment": "Example customer manifest — copy and customize for each new customer",
+  "_constraint": "customerId = profile — MUST be identical. Agent ID is always 'main' within each profile (OpenClaw constraint).",
+
+  "customerId": "example",
+  "status": "template",
+
+  "port": 18790,
+
+  "channels": ["telegram"],
+  "telegramBotToken": {
+    "_comment": "Store actual token in auth profiles, not here",
+    "ref": "env:TELEGRAM_BOT_TOKEN_EXAMPLE"
+  },
+
+  "brandName": "Example Brand",
+  "audience": "Tech-savvy professionals aged 25-45",
+
+  "modelProfile": {
+    "primary": "openai-codex/gpt-5.4",
+    "fallbacks": ["google/gemini-3-pro-preview", "openrouter/auto"]
+  },
+
+  "skills": [
+    "campaign-brief",
+    "campaign-lifecycle",
+    "campaign-diagnosis",
+    "structured-brainstorm",
+    "content-ab-test",
+    "content-repurposing",
+    "campaign-decision-gate",
+    "weekly-summary",
+    "campaign-retrospective"
+  ],
+
+  "reporting": {
+    "_comment": "Optional — configure per customer for automated weekly/monthly reports",
+    "timezone": "Asia/Shanghai",
+    "delivery": {
+      "channel": "telegram",
+      "target": ""
+    },
+    "weekly": { "cron": "0 9 * * 1" },
+    "monthly": { "cron": "0 9 1 * *" }
+  },
+
+  "sandbox": {
+    "mode": "off"
+  },
+
+  "tools": {
+    "profile": "full",
+    "fs": {
+      "workspaceOnly": true
+    },
+    "exec": {
+      "security": "deny"
+    }
+  },
+
+  "hostBoundSkillsDenylist": ["things-mac", "tmux", "1password"]
+}

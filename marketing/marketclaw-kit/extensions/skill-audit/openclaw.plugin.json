@@ -1,0 +1,8 @@
+{
+  "id": "skill-audit",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

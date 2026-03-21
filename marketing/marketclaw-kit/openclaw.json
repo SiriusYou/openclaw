@@ -1,0 +1,122 @@
+{
+  "gateway": {
+    "mode": "local",
+    "bind": "loopback",
+    "port": 18789,
+    "trustedProxies": []
+  },
+
+  "auth": {
+    "cooldowns": {
+      "billingBackoffHours": 1,
+      "billingMaxHours": 12
+    }
+  },
+
+  "logging": {
+    "level": "info",
+    "redactSensitive": "tools"
+  },
+  "diagnostics": {
+    "enabled": true,
+    "flags": ["gateway.*", "session.*", "webhook.*", "agent.*"]
+  },
+
+  "memory": {
+    "backend": "builtin",
+    "citations": "auto",
+    "qmd": {
+      "paths": [
+        { "path": "__WORKSPACE_ROOT__/marketing/memory/", "name": "Marketing Knowledge" },
+        { "path": "__WORKSPACE_ROOT__/marketing/strategies/", "name": "Campaign Strategies" },
+        { "path": "__WORKSPACE_ROOT__/marketing/performance/", "name": "Performance Data" }
+      ],
+      "sessions": {
+        "enabled": true,
+        "retentionDays": 180
+      },
+      "update": {
+        "interval": "5m",
+        "embedInterval": "30m"
+      },
+      "limits": {
+        "maxResults": 10,
+        "maxSnippetChars": 500
+      }
+    }
+  },
+
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "openai-codex/gpt-5.4",
+        "fallbacks": ["google/gemini-3-pro-preview", "openrouter/auto"]
+      },
+      "sandbox": {
+        "mode": "off"
+      }
+    },
+
+    "list": [
+      {
+        "id": "main",
+        "default": true,
+        "name": "Marketing Orchestrator",
+        "workspace": "__WORKSPACE_ROOT__/marketing",
+        "model": {
+          "primary": "openai-codex/gpt-5.4",
+          "fallbacks": ["google/gemini-3-pro-preview", "openrouter/auto"]
+        },
+        "skills": [
+          "campaign-brief",
+          "content-ab-test",
+          "campaign-diagnosis",
+          "structured-brainstorm",
+          "campaign-lifecycle",
+          "content-repurposing",
+          "campaign-decision-gate",
+          "weekly-summary",
+          "campaign-retrospective"
+        ],
+        "tools": {
+          "profile": "full",
+          "alsoAllow": ["memory_search", "memory_get"]
+        },
+        "memorySearch": { "enabled": true },
+        "groupChat": {
+          "mentionPatterns": ["@orchestrator", "@marketing"]
+        },
+        "sandbox": { "mode": "off" }
+      }
+    ]
+  },
+
+  "bindings": [
+    {
+      "agentId": "main",
+      "match": { "channel": "telegram", "accountId": "*" }
+    }
+  ],
+
+  "session": {
+    "sendPolicy": {
+      "default": "deny",
+      "rules": [
+        { "action": "allow", "match": { "channel": "telegram" } },
+        { "action": "allow", "match": { "rawKeyPrefix": "agent:main:" } }
+      ]
+    }
+  },
+
+  "plugins": {
+    "enabled": true,
+    "entries": {
+      "telegram": { "enabled": true }
+    }
+  },
+
+  "cron": {
+    "enabled": true,
+    "maxConcurrentRuns": 3
+  }
+}
