@@ -58,5 +58,11 @@
     }
   },
 
-  "hostBoundSkillsDenylist": ["things-mac", "tmux", "1password"]
+  "hostBoundSkillsDenylist": ["things-mac", "tmux", "1password"],
+
+  "costAlert": {
+    "_comment": "Optional — per-customer cost thresholds. Defaults: dailyWarning=15, dailyCritical=20",
+    "dailyWarning": 15,
+    "dailyCritical": 20
+  }
 }

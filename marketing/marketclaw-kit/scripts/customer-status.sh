@@ -4,11 +4,19 @@
 # ============================================================================
 #
 # Iterates all customer manifests and reports gateway status for each.
+# Includes cost alert status (from cost-report-latest.json) and backup
+# freshness (from ~/.openclaw/backups/customers/{id}/).
 #
 # Usage:
 #   ./customer-status.sh [--json]
 #
-# Output: table of customer ID, brand, port, manifest status, gateway status
+# Output: table of customer ID, brand, port, manifest status, gateway status,
+#         cost status, backup status
+#
+# Cost alert defaults (when manifest has no costAlert field):
+#   dailyWarning: 15, dailyCritical: 20
+#
+# Staleness threshold: 48 hours for both cost reports and backups.
 # ============================================================================
 
 set -euo pipefail
@@ -51,6 +59,9 @@ HAS_CLI=false
 if command -v openclaw &>/dev/null; then
   HAS_CLI=true
 fi
+
+# --- Staleness threshold (48 hours in seconds) ---
+STALE_THRESHOLD=172800
 
 # --- Collect status ---
 declare -a results=()
@@ -108,7 +119,54 @@ for manifest in "$CUSTOMERS_DIR"/*.json; do
     has_state="yes"
   fi
 
-  results+=("${cid}|${brand}|${port}|${mstatus}|${gw_status}|${has_state}")
+  # --- Cost status (single node call for status + coverage) ---
+  cost_status="null"
+  cost_coverage="null"
+  cost_report_file="$state_dir/cost-report-latest.json"
+  if [[ -f "$cost_report_file" ]]; then
+    read -r cost_status cost_coverage < <(node -e "
+      const fs = require('fs');
+      const report = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+      const manifest = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+      const staleMs = ${STALE_THRESHOLD} * 1000;
+
+      const generatedAt = new Date(report.generatedAt);
+      const ageMs = Date.now() - generatedAt.getTime();
+
+      // Coverage: hours since UTC midnight / 24
+      const utcHours = generatedAt.getUTCHours() + generatedAt.getUTCMinutes() / 60;
+      const coverage = Math.min(1.0, utcHours / 24).toFixed(2);
+
+      if (ageMs > staleMs) { console.log('STALE ' + coverage); process.exit(0); }
+
+      const warn = manifest.costAlert?.dailyWarning ?? 15;
+      const crit = manifest.costAlert?.dailyCritical ?? 20;
+      const cost = report.totalCost || 0;
+
+      const status = cost >= crit ? 'CRITICAL' : cost >= warn ? 'WARNING' : 'OK';
+      console.log(status + ' ' + coverage);
+    " "$cost_report_file" "$manifest" 2>/dev/null) || { cost_status="null"; cost_coverage="null"; }
+  fi
+
+  # --- Backup status (single node call for mtime + staleness) ---
+  backup_status="null"
+  last_backup="null"
+  backup_dir="$HOME/.openclaw/backups/customers/${cid}"
+  if [[ -d "$backup_dir" ]]; then
+    newest_backup=$(find "$backup_dir" -maxdepth 1 -name "*.tar.gz" -type f 2>/dev/null | sort -r | head -1)
+    if [[ -n "$newest_backup" ]]; then
+      read -r backup_status last_backup < <(node -e "
+        const fs = require('fs');
+        const stat = fs.statSync(process.argv[1]);
+        const mtime = stat.mtime;
+        const ageMs = Date.now() - mtime.getTime();
+        const status = ageMs > ${STALE_THRESHOLD} * 1000 ? 'STALE' : 'OK';
+        console.log(status + ' ' + mtime.toISOString());
+      " "$newest_backup" 2>/dev/null) || { backup_status="null"; last_backup="null"; }
+    fi
+  fi
+
+  results+=("${cid}|${brand}|${port}|${mstatus}|${gw_status}|${has_state}|${cost_status}|${cost_coverage}|${backup_status}|${last_backup}")
 done
 
 # --- Handle empty results ---
@@ -132,15 +190,22 @@ if [[ "$JSON_OUTPUT" == "true" ]]; then
   echo "["
   first=true
   for entry in "${results[@]}"; do
-    IFS='|' read -r cid brand port mstatus gw_status has_state <<< "$entry"
+    IFS='|' read -r cid brand port mstatus gw_status has_state cost_status cost_coverage backup_status last_backup <<< "$entry"
     if [[ "$first" == "true" ]]; then
       first=false
     else
       echo ","
     fi
-    printf '  {"customerId":"%s","brandName":"%s","port":%s,"status":"%s","gateway":"%s","hasState":%s}' \
+    # Format nullable fields
+    cost_status_json="$( [[ "$cost_status" == "null" ]] && echo "null" || echo "\"$cost_status\"" )"
+    cost_coverage_json="$( [[ "$cost_coverage" == "null" ]] && echo "null" || echo "$cost_coverage" )"
+    backup_status_json="$( [[ "$backup_status" == "null" ]] && echo "null" || echo "\"$backup_status\"" )"
+    last_backup_json="$( [[ "$last_backup" == "null" ]] && echo "null" || echo "\"$last_backup\"" )"
+
+    printf '  {"customerId":"%s","brandName":"%s","port":%s,"status":"%s","gateway":"%s","hasState":%s,"costStatus":%s,"costSampleCoverage":%s,"backupStatus":%s,"lastBackup":%s}' \
       "$cid" "$brand" "${port:-null}" "$mstatus" "$gw_status" \
-      "$( [[ "$has_state" == "yes" ]] && echo "true" || echo "false" )"
+      "$( [[ "$has_state" == "yes" ]] && echo "true" || echo "false" )" \
+      "$cost_status_json" "$cost_coverage_json" "$backup_status_json" "$last_backup_json"
   done
   echo ""
   echo "]"
@@ -153,13 +218,13 @@ echo -e "${CYAN}═══ Customer Gateway Status ═══${NC}"
 echo ""
 
 # Header
-printf "  ${DIM}%-18s %-20s %6s  %-10s %-10s %s${NC}\n" \
-  "CUSTOMER" "BRAND" "PORT" "MANIFEST" "GATEWAY" "STATE"
-printf "  ${DIM}%-18s %-20s %6s  %-10s %-10s %s${NC}\n" \
-  "────────" "─────" "────" "────────" "───────" "─────"
+printf "  ${DIM}%-18s %-20s %6s  %-10s %-10s %-8s %-8s %s${NC}\n" \
+  "CUSTOMER" "BRAND" "PORT" "MANIFEST" "GATEWAY" "COST" "BACKUP" "STATE"
+printf "  ${DIM}%-18s %-20s %6s  %-10s %-10s %-8s %-8s %s${NC}\n" \
+  "────────" "─────" "────" "────────" "───────" "────" "──────" "─────"
 
 for entry in "${results[@]}"; do
-  IFS='|' read -r cid brand port mstatus gw_status has_state <<< "$entry"
+  IFS='|' read -r cid brand port mstatus gw_status has_state cost_status cost_coverage backup_status last_backup <<< "$entry"
 
   # Color-code status
   case "$mstatus" in
@@ -176,10 +241,24 @@ for entry in "${results[@]}"; do
     *)         gw_color="${DIM}" ;;
   esac
 
+  case "$cost_status" in
+    OK)       cost_color="${GREEN}" ;;
+    WARNING)  cost_color="${YELLOW}" ;;
+    CRITICAL) cost_color="${RED}" ;;
+    STALE)    cost_color="${YELLOW}" ;;
+    *)        cost_color="${DIM}"; cost_status="--" ;;
+  esac
+
+  case "$backup_status" in
+    OK)    bk_color="${GREEN}" ;;
+    STALE) bk_color="${YELLOW}" ;;
+    *)     bk_color="${DIM}"; backup_status="--" ;;
+  esac
+
   state_icon="$( [[ "$has_state" == "yes" ]] && echo "yes" || echo "no" )"
 
-  printf "  %-18s %-20s %6s  ${ms_color}%-10s${NC} ${gw_color}%-10s${NC} %s\n" \
-    "$cid" "${brand:0:20}" "$port" "$mstatus" "$gw_status" "$state_icon"
+  printf "  %-18s %-20s %6s  ${ms_color}%-10s${NC} ${gw_color}%-10s${NC} ${cost_color}%-8s${NC} ${bk_color}%-8s${NC} %s\n" \
+    "$cid" "${brand:0:20}" "$port" "$mstatus" "$gw_status" "$cost_status" "$backup_status" "$state_icon"
 done
 
 echo ""
