@@ -706,6 +706,17 @@ cmd_export() {
 
   ok "Exported to: $archive"
   info "Size: $(du -h "$archive" | cut -f1)"
+
+  # Step 4: Best-effort cron metadata (requires gateway to be online)
+  if command -v openclaw &>/dev/null; then
+    local cron_meta="$EXPORT_DIR/${CUSTOMER_ID}-${timestamp}-crons.json"
+    if openclaw --profile "$CUSTOMER_ID" cron list --json > "$cron_meta" 2>/dev/null; then
+      ok "Cron metadata saved: $cron_meta"
+    else
+      info "Cron metadata skipped (gateway offline or no crons)"
+      rm -f "$cron_meta"
+    fi
+  fi
 }
 
 # ============================================================================

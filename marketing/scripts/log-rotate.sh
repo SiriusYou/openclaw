@@ -6,6 +6,19 @@
 #
 # Usage: bash marketing/scripts/log-rotate.sh [--dry-run]
 # Recommended: run weekly via launchd or cron
+#
+# SECURITY NOTE (M6 known limitation):
+# /tmp/openclaw/openclaw-*.log is a SHARED rolling log — all gateway profiles
+# (operator + customer) write to the same file. This means customer operation
+# logs from different profiles are mixed in these files.
+#
+# Mitigations:
+#   - logging.redactSensitive: "tools" redacts sensitive tool output
+#   - LaunchAgent stdout/stderr is already profile-scoped (src/daemon/launchd.ts:58-69)
+#   - Structured gateway logs live in per-profile state dirs
+#   - This rotation script limits exposure to 14 days
+#
+# See: marketing/docs/security-audit.md Section 4
 # ============================================================================
 
 set -euo pipefail

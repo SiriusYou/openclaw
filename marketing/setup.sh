@@ -381,6 +381,14 @@ step "8b" "Deploying backup and log rotation scripts"
 
 mkdir -p "$CONFIG_DIR/scripts"
 
+# Deploy shared library (required by cost-report, backup, security-check scripts)
+LIB_DISCOVER_SRC="$MARKETING_DIR/scripts/lib-discover-profiles.sh"
+LIB_DISCOVER_DST="$CONFIG_DIR/scripts/lib-discover-profiles.sh"
+if [ -f "$LIB_DISCOVER_SRC" ]; then
+  cp "$LIB_DISCOVER_SRC" "$LIB_DISCOVER_DST"
+  ok "Deployed lib-discover-profiles.sh to $LIB_DISCOVER_DST"
+fi
+
 # Deploy daily backup script
 BACKUP_SRC="$MARKETING_DIR/scripts/daily-backup.sh"
 BACKUP_DST="$CONFIG_DIR/scripts/daily-backup.sh"
@@ -406,7 +414,58 @@ fi
 # Ensure log directory exists for backup logs
 mkdir -p /tmp/openclaw
 
-ok "Backup and log rotation scripts deployed"
+# Deploy customer cost report script
+COST_REPORT_SRC="$MARKETING_DIR/scripts/customer-cost-report.sh"
+COST_REPORT_DST="$CONFIG_DIR/scripts/customer-cost-report.sh"
+if [ -f "$COST_REPORT_SRC" ]; then
+  cp "$COST_REPORT_SRC" "$COST_REPORT_DST"
+  chmod +x "$COST_REPORT_DST"
+  ok "Deployed customer-cost-report.sh to $COST_REPORT_DST"
+fi
+
+# Deploy launchd plist for cost report (local 23:45)
+COST_PLIST_SRC="$MARKETING_DIR/scripts/com.openclaw.cost-report.plist"
+COST_PLIST_DST="$HOME/Library/LaunchAgents/com.openclaw.cost-report.plist"
+if [ -f "$COST_PLIST_SRC" ]; then
+  if [ -f "$COST_PLIST_DST" ]; then
+    launchctl unload "$COST_PLIST_DST" 2>/dev/null || true
+  fi
+  cp "$COST_PLIST_SRC" "$COST_PLIST_DST"
+  launchctl load "$COST_PLIST_DST" 2>/dev/null || true
+  ok "Installed and loaded launchd job: com.openclaw.cost-report"
+fi
+
+# Deploy customer backup script
+BACKUP_ALL_SRC="$MARKETING_DIR/scripts/backup-all-customers.sh"
+BACKUP_ALL_DST="$CONFIG_DIR/scripts/backup-all-customers.sh"
+if [ -f "$BACKUP_ALL_SRC" ]; then
+  cp "$BACKUP_ALL_SRC" "$BACKUP_ALL_DST"
+  chmod +x "$BACKUP_ALL_DST"
+  ok "Deployed backup-all-customers.sh to $BACKUP_ALL_DST"
+fi
+
+# Deploy launchd plist for customer backups (3:30 AM)
+BACKUP_ALL_PLIST_SRC="$MARKETING_DIR/scripts/com.openclaw.backup-all-customers.plist"
+BACKUP_ALL_PLIST_DST="$HOME/Library/LaunchAgents/com.openclaw.backup-all-customers.plist"
+if [ -f "$BACKUP_ALL_PLIST_SRC" ]; then
+  if [ -f "$BACKUP_ALL_PLIST_DST" ]; then
+    launchctl unload "$BACKUP_ALL_PLIST_DST" 2>/dev/null || true
+  fi
+  cp "$BACKUP_ALL_PLIST_SRC" "$BACKUP_ALL_PLIST_DST"
+  launchctl load "$BACKUP_ALL_PLIST_DST" 2>/dev/null || true
+  ok "Installed and loaded launchd job: com.openclaw.backup-all-customers"
+fi
+
+# Deploy security check script
+SECCHECK_SRC="$MARKETING_DIR/scripts/security-check.sh"
+SECCHECK_DST="$CONFIG_DIR/scripts/security-check.sh"
+if [ -f "$SECCHECK_SRC" ]; then
+  cp "$SECCHECK_SRC" "$SECCHECK_DST"
+  chmod +x "$SECCHECK_DST"
+  ok "Deployed security-check.sh to $SECCHECK_DST"
+fi
+
+ok "Backup, cost reporting, and security scripts deployed"
 
 # ============================================================================
 # Step 9: Validate .env Before Starting Services

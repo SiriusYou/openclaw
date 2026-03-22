@@ -14,29 +14,32 @@ profile B's `agents/main/`.
 
 ## Fields
 
-| Field                        | Type     | Description                                                                  |
-| ---------------------------- | -------- | ---------------------------------------------------------------------------- |
-| `customerId`                 | string   | Unique identifier (alphanumeric + hyphen)                                    |
-| `status`                     | enum     | `template`, `active`, `provisioned`, `paused`, `disabled`                    |
-| `port`                       | number   | Gateway port (unique per customer, start at 18790)                           |
-| `channels`                   | string[] | Enabled channel plugins                                                      |
-| `telegramBotToken`           | object   | Token reference (never plaintext in this file)                               |
-| `brandName`                  | string   | Customer's brand name                                                        |
-| `audience`                   | string   | Target audience description                                                  |
-| `modelProfile`               | object   | LLM model configuration (primary + fallbacks)                                |
-| `skills`                     | string[] | Enabled skills for this customer                                             |
-| `sandbox`                    | object   | Sandbox configuration (default: off)                                         |
-| `tools`                      | object   | Tool access control                                                          |
-| `hostBoundSkillsDenylist`    | string[] | Skills to disable (shared host state)                                        |
-| `reporting`                  | object   | Reporting configuration (optional)                                           |
-| `reporting.timezone`         | string   | IANA timezone for cron scheduling (default: Asia/Shanghai)                   |
-| `reporting.delivery`         | object   | Delivery config                                                              |
-| `reporting.delivery.channel` | string   | Delivery channel (default: telegram)                                         |
-| `reporting.delivery.target`  | string   | Delivery target (e.g. Telegram chat ID). **Required** — fail-closed if empty |
-| `reporting.weekly`           | object   | Weekly summary cron config                                                   |
-| `reporting.weekly.cron`      | string   | Cron expression (default: `0 9 * * 1` — Mon 09:00)                           |
-| `reporting.monthly`          | object   | Monthly retrospective cron config                                            |
-| `reporting.monthly.cron`     | string   | Cron expression (default: `0 9 1 * *` — 1st of month)                        |
+| Field                        | Type     | Description                                                                   |
+| ---------------------------- | -------- | ----------------------------------------------------------------------------- |
+| `customerId`                 | string   | Unique identifier (alphanumeric + hyphen)                                     |
+| `status`                     | enum     | `template`, `active`, `provisioned`, `paused`, `disabled`                     |
+| `port`                       | number   | Gateway port (unique per customer, start at 18790)                            |
+| `channels`                   | string[] | Enabled channel plugins                                                       |
+| `telegramBotToken`           | object   | Token reference (never plaintext in this file)                                |
+| `brandName`                  | string   | Customer's brand name                                                         |
+| `audience`                   | string   | Target audience description                                                   |
+| `modelProfile`               | object   | LLM model configuration (primary + fallbacks)                                 |
+| `skills`                     | string[] | Enabled skills for this customer                                              |
+| `sandbox`                    | object   | Sandbox configuration (default: off)                                          |
+| `tools`                      | object   | Tool access control                                                           |
+| `hostBoundSkillsDenylist`    | string[] | Skills to disable (shared host state)                                         |
+| `costAlert`                  | object   | Cost alert thresholds (optional, defaults: dailyWarning=15, dailyCritical=20) |
+| `costAlert.dailyWarning`     | number   | Daily cost ($) that triggers WARNING status                                   |
+| `costAlert.dailyCritical`    | number   | Daily cost ($) that triggers CRITICAL status                                  |
+| `reporting`                  | object   | Reporting configuration (optional)                                            |
+| `reporting.timezone`         | string   | IANA timezone for cron scheduling (default: Asia/Shanghai)                    |
+| `reporting.delivery`         | object   | Delivery config                                                               |
+| `reporting.delivery.channel` | string   | Delivery channel (default: telegram)                                          |
+| `reporting.delivery.target`  | string   | Delivery target (e.g. Telegram chat ID). **Required** — fail-closed if empty  |
+| `reporting.weekly`           | object   | Weekly summary cron config                                                    |
+| `reporting.weekly.cron`      | string   | Cron expression (default: `0 9 * * 1` — Mon 09:00)                            |
+| `reporting.monthly`          | object   | Monthly retrospective cron config                                             |
+| `reporting.monthly.cron`     | string   | Cron expression (default: `0 9 1 * *` — 1st of month)                         |
 
 ## Derived Fields (NOT stored — computed at runtime)
 

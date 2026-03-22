@@ -949,3 +949,137 @@ openclaw --profile {id} cron runs --id <job-id> --limit 5  # Check history
 - [ ] Full 7-phase campaign completes on test-alpha without skill-not-found errors
 - [ ] Weekly summary delivered via Telegram to operator
 - [ ] Vitest skills consistency tests pass
+
+---
+
+## Phase 6: Security Audit & Hardening
+
+### Overview
+
+Phase 6 hardens the multi-customer deployment with isolation auditing, per-customer cost
+tracking, expanded backup coverage, and runtime security validation.
+
+**Audit report**: `marketing/docs/security-audit.md` — full isolation boundary analysis.
+
+### 6.1 Security Check (Runtime Validation)
+
+Run on a single profile or all discovered profiles:
+
+```bash
+# Single profile
+bash marketing/scripts/security-check.sh --profile test-alpha
+
+# All customer profiles
+bash marketing/scripts/security-check.sh --all
+```
+
+Checks: auth validity, loopback bind, exec=deny, sendPolicy=deny, no cross-profile refs,
+single agent, host-bound skills disabled, fs.workspaceOnly.
+
+### 6.2 Per-Customer Cost Tracking
+
+**Producer**: `customer-cost-report.sh` queries each profile's cost via RPC and writes
+`~/.openclaw-{id}/cost-report-latest.json`. Scheduled at local 23:45 via launchd.
+
+**Consumer**: `customer-status.sh` reads the report, compares against manifest `costAlert`
+thresholds (defaults: dailyWarning=15, dailyCritical=20), and displays OK/WARNING/CRITICAL.
+
+**Important**: Cost reports are partial UTC day samples (~65% coverage for CST deployments).
+CRITICAL status is a strong signal; OK status has lower confidence for the full day.
+
+```bash
+# Manual run
+bash marketing/scripts/customer-cost-report.sh
+
+# Check aggregated status
+bash marketing/scripts/customer-status.sh
+```
+
+### 6.3 Per-Customer Backup
+
+**Script**: `backup-all-customers.sh` discovers profiles and creates whole-directory tar
+archives to `~/.openclaw/backups/customers/{id}/YYYY-MM-DD.tar.gz`. 30-day retention.
+Scheduled at 3:30 AM via launchd.
+
+```bash
+# Manual run
+bash marketing/scripts/backup-all-customers.sh
+
+# Dry run
+bash marketing/scripts/backup-all-customers.sh --dry-run
+```
+
+`customer-status.sh` checks backup freshness (48h staleness threshold).
+
+### 6.4 Deployment for Existing Installations
+
+If M6 scripts are added after initial setup, deploy manually:
+
+```bash
+# Shared library (required by cost-report, backup, security-check)
+cp marketing/scripts/lib-discover-profiles.sh ~/.openclaw/scripts/
+
+# Cost report
+cp marketing/scripts/customer-cost-report.sh ~/.openclaw/scripts/
+chmod +x ~/.openclaw/scripts/customer-cost-report.sh
+cp marketing/scripts/com.openclaw.cost-report.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.openclaw.cost-report.plist
+
+# Customer backup
+cp marketing/scripts/backup-all-customers.sh ~/.openclaw/scripts/
+chmod +x ~/.openclaw/scripts/backup-all-customers.sh
+cp marketing/scripts/com.openclaw.backup-all-customers.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.openclaw.backup-all-customers.plist
+
+# Security check
+cp marketing/scripts/security-check.sh ~/.openclaw/scripts/
+chmod +x ~/.openclaw/scripts/security-check.sh
+```
+
+### 6.5 Cost Alert Thresholds
+
+Add `costAlert` to customer manifests for per-customer overrides:
+
+```json
+"costAlert": {
+  "dailyWarning": 15,
+  "dailyCritical": 20
+}
+```
+
+Without this field, `customer-status.sh` applies defaults (15/20).
+
+### 6.6 Per-Customer Cost Cron (Manual)
+
+For per-customer cost alerting via Telegram, create a cron on the customer gateway:
+
+```bash
+openclaw --profile {id} cron add \
+  --name "{id}-cost-daily" \
+  --schedule "45 23 * * *" \
+  --prompt "Report today's cost usage. If total cost exceeds \$15, flag as WARNING. If over \$20, flag as CRITICAL. Deliver a brief summary." \
+  --deliver telegram \
+  --target "<chat-id>"
+```
+
+### 6.7 Known Limitations
+
+1. **Rolling log mixing**: `/tmp/openclaw/openclaw-*.log` is shared across all profiles.
+   Mitigated by `redactSensitive: "tools"` and LaunchAgent stdout/stderr isolation.
+   See `marketing/docs/security-audit.md` Section 4.
+
+2. **Same macOS user**: All profiles run under one user. No file permission enforcement.
+   Upgrade path: Linux with independent OS users.
+
+3. **Exec-approvals shared**: `~/.openclaw/exec-approvals.json` is not profile-scoped.
+   Mitigated by `exec.security: "deny"` on all customer profiles.
+
+### M6 Exit Criteria
+
+- [ ] `security-audit.md` reviewed by operator
+- [ ] `security-posture.test.ts` passes (manifest + provisioning output assertions)
+- [ ] `security-check.sh --all` passes on running profiles
+- [ ] `customer-cost-report.sh` generates valid JSON reports
+- [ ] `backup-all-customers.sh` creates archives for all profiles
+- [ ] `customer-status.sh` shows cost + backup columns
+- [ ] Launchd jobs deployed (cost-report at 23:45, backup at 3:30 AM)
