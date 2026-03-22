@@ -171,8 +171,8 @@ describe("MarketClaw Kit — Package Integrity", () => {
     test("primary model matches source config", () => {
       const config = JSON.parse(readFileSync(join(KIT_DIR, "openclaw.json"), "utf8"));
       const mainAgent = config.agents.list[0];
-      expect(mainAgent.model.primary).toBe("openai-codex/gpt-5.4");
-      expect(mainAgent.model.fallbacks).toEqual(["google/gemini-3-pro-preview", "openrouter/auto"]);
+      expect(mainAgent.model.primary).toBe("google/gemini-3-pro-preview");
+      expect(mainAgent.model.fallbacks).toEqual(["openrouter/auto"]);
     });
 
     test("sandbox mode is off", () => {
@@ -222,11 +222,8 @@ describe("MarketClaw Kit — Package Integrity", () => {
 
     test("example.json modelProfile matches source config", () => {
       const manifest = JSON.parse(readFileSync(join(KIT_DIR, "customers/example.json"), "utf8"));
-      expect(manifest.modelProfile.primary).toBe("openai-codex/gpt-5.4");
-      expect(manifest.modelProfile.fallbacks).toEqual([
-        "google/gemini-3-pro-preview",
-        "openrouter/auto",
-      ]);
+      expect(manifest.modelProfile.primary).toBe("google/gemini-3-pro-preview");
+      expect(manifest.modelProfile.fallbacks).toEqual(["openrouter/auto"]);
     });
   });
 });

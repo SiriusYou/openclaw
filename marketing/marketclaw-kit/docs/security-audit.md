@@ -147,9 +147,9 @@ Every customer gateway is provisioned with:
 
 ## 9. Automated Validation
 
-- **Static**: `test/scripts/security-posture.test.ts` — validates manifest security fields + provisioning output
-- **Runtime**: `marketing/scripts/security-check.sh` — validates live profile security posture
-- **Continuous**: `customer-status.sh` — aggregated view of all customer health + cost + backup status
+- **Static**: `security-posture.test.ts` (in monorepo test suite) — validates manifest security fields + provisioning output
+- **Runtime**: `scripts/security-check.sh` — validates live profile security posture
+- **Continuous**: `scripts/customer-status.sh` — aggregated view of all customer health + cost + backup status
 
 ---
 

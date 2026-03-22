@@ -49,8 +49,8 @@
   "agents": {
     "defaults": {
       "model": {
-        "primary": "openai-codex/gpt-5.4",
-        "fallbacks": ["google/gemini-3-pro-preview", "openrouter/auto"]
+        "primary": "google/gemini-3-pro-preview",
+        "fallbacks": ["openrouter/auto"]
       },
       "sandbox": {
         "mode": "off"
@@ -64,8 +64,8 @@
         "name": "Marketing Orchestrator",
         "workspace": "__WORKSPACE_ROOT__/marketing",
         "model": {
-          "primary": "openai-codex/gpt-5.4",
-          "fallbacks": ["google/gemini-3-pro-preview", "openrouter/auto"]
+          "primary": "google/gemini-3-pro-preview",
+          "fallbacks": ["openrouter/auto"]
         },
         "skills": [
           "campaign-brief",

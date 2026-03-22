@@ -80,7 +80,7 @@ Step-by-step procedure for onboarding a new customer (operator-executed).
 
 - [ ] Customer has provided: brand name, target audience, brand voice/tone (optional)
 - [ ] Telegram bot created via @BotFather (record bot username and token)
-- [ ] API keys ready (at least one LLM provider: OpenAI, Google, or OpenRouter)
+- [ ] API keys ready (at least one chain-compatible provider: Google or OpenRouter)
 - [ ] Unique port allocated (check existing manifests to avoid conflicts)
 
 ### Steps
@@ -88,7 +88,7 @@ Step-by-step procedure for onboarding a new customer (operator-executed).
 1. **Create manifest**:
 
    ```bash
-   cp marketing/customers/example.json marketing/customers/acme-corp.json
+   cp customers/example.json customers/acme-corp.json
    ```
 
    Edit `acme-corp.json`: set `customerId`, `brandName`, `audience`, `port`, `reporting.delivery.target`.
@@ -96,7 +96,7 @@ Step-by-step procedure for onboarding a new customer (operator-executed).
 2. **Provision**:
 
    ```bash
-   bash marketing/scripts/provision-customer.sh create acme-corp
+   bash scripts/provision-customer.sh create acme-corp
    ```
 
    This creates the state dir, config, workspace, seeds templates, copies skills, and starts the gateway.
@@ -129,7 +129,7 @@ Step-by-step procedure for onboarding a new customer (operator-executed).
 7. **Configure automated reports** (if `reporting` section is in manifest):
 
    ```bash
-   bash marketing/scripts/configure-customer-crons.sh acme-corp
+   bash scripts/configure-customer-crons.sh acme-corp
    ```
 
 8. **Customize workspace** (optional):
