@@ -9,7 +9,7 @@
 # Output: JOB_NAME: OK (last run Xh ago) | JOB_NAME: FAIL (reason)
 # Exit:   0 = all pass, 1 = any failure
 #
-# Usage: bash marketing/scripts/cron-health-check.sh
+# Usage: bash scripts/cron-health-check.sh
 # ============================================================================
 
 set -euo pipefail

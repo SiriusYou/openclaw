@@ -4,12 +4,12 @@
 # ============================================================================
 # Upgrades the CLI npm package and restarts the launchd gateway daemon.
 #
-# Usage: bash marketing/scripts/upgrade-cli.sh [version]
+# Usage: bash scripts/upgrade-cli.sh [version]
 #   version: npm version to install (default: "latest")
 #
 # Examples:
-#   bash marketing/scripts/upgrade-cli.sh           # upgrade to latest
-#   bash marketing/scripts/upgrade-cli.sh 2026.3.2  # pin specific version
+#   bash scripts/upgrade-cli.sh           # upgrade to latest
+#   bash scripts/upgrade-cli.sh 2026.3.2  # pin specific version
 # ============================================================================
 
 set -euo pipefail

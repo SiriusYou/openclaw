@@ -7,7 +7,7 @@
 # tar archives for each. Also copies cron/jobs.json as a quick-reference file.
 #
 # Usage:
-#   bash marketing/scripts/backup-all-customers.sh [--dry-run]
+#   bash scripts/backup-all-customers.sh [--dry-run]
 #
 # Backup layout:
 #   ~/.openclaw/backups/customers/{id}/YYYY-MM-DD.tar.gz

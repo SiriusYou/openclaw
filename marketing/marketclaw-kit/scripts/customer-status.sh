@@ -181,7 +181,7 @@ if [[ ${#results[@]} -eq 0 ]]; then
   echo -e "${DIM}  No customers found (only example/template manifests present)${NC}"
   echo ""
   echo "  Create a customer manifest in: $CUSTOMERS_DIR/"
-  echo "  Then run: bash marketing/scripts/provision-customer.sh create <id>"
+  echo "  Then run: bash scripts/provision-customer.sh create <id>"
   exit 0
 fi
 

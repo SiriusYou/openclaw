@@ -8,7 +8,7 @@
 # per-profile cost-report-latest.json.
 #
 # Usage:
-#   bash marketing/scripts/customer-cost-report.sh [--dry-run]
+#   bash scripts/customer-cost-report.sh [--dry-run]
 #
 # Output per profile:
 #   ~/.openclaw-{id}/cost-report-latest.json

@@ -6,8 +6,8 @@
 # Validates security configuration of customer gateway profiles.
 #
 # Usage:
-#   bash marketing/scripts/security-check.sh --profile <id>
-#   bash marketing/scripts/security-check.sh --all
+#   bash scripts/security-check.sh --profile <id>
+#   bash scripts/security-check.sh --all
 #
 # Checks:
 #   1. Auth profiles valid (key or keyRef present for API key profiles)

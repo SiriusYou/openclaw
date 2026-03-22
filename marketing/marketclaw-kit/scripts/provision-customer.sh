@@ -503,7 +503,7 @@ HEARTBEAT_EOF
     else
       final_status="provisioned"
       warn "Gateway not confirmed running — manifest set to 'provisioned' (not 'active')"
-      warn "After fixing gateway, run: bash marketing/scripts/provision-customer.sh resume $CUSTOMER_ID"
+      warn "After fixing gateway, run: bash scripts/provision-customer.sh resume $CUSTOMER_ID"
     fi
   fi
 

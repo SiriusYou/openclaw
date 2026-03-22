@@ -4,7 +4,7 @@
 # ============================================================================
 # Cleans up logs older than 14 days from /tmp/openclaw/
 #
-# Usage: bash marketing/scripts/log-rotate.sh [--dry-run]
+# Usage: bash scripts/log-rotate.sh [--dry-run]
 # Recommended: run weekly via launchd or cron
 #
 # SECURITY NOTE (M6 known limitation):
