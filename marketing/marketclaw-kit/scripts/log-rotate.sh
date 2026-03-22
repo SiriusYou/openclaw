@@ -18,7 +18,7 @@
 #   - Structured gateway logs live in per-profile state dirs
 #   - This rotation script limits exposure to 14 days
 #
-# See: marketing/docs/security-audit.md Section 4
+# See: docs/security-audit.md Section 4
 # ============================================================================
 
 set -euo pipefail
