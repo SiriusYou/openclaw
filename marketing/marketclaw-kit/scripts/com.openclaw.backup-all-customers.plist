@@ -9,7 +9,7 @@
 		<string>/bin/bash</string>
 		<string>-l</string>
 		<string>-c</string>
-		<string>$HOME/.openclaw/scripts/backup-all-customers.sh >> /tmp/openclaw/backup-all-customers.log 2>&1</string>
+		<string>$HOME/.openclaw/scripts/backup-all-customers.sh >> /tmp/openclaw/backup-all-customers.log 2>&amp;1</string>
 	</array>
 	<key>StartCalendarInterval</key>
 	<dict>
