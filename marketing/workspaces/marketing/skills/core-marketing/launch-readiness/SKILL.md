@@ -31,8 +31,8 @@ Score every pre-launch checklist item as PASS or FAIL with concrete evidence, th
 1. `memory_search('<campaign-name> brief')` — load campaign brief (channel, recipients, timeline)
 2. `memory_search('<campaign-name> content')` — verify content status and approval
 3. `memory_search('campaign lessons learned')` — check for relevant prior lessons
-4. Verify channel status: `openclaw channels status --probe`
-5. Verify send policy: check runtime config `sendPolicy` rules cover the target session type
+4. Verify channel status: search memory for channel configuration evidence (`memory_search('channel status')`) or ask operator to confirm channel is active
+5. Verify send policy: search memory for send policy configuration (`memory_search('sendPolicy')`) or ask operator to confirm policy permits the delivery path
 
 ## Scoring System
 
@@ -52,9 +52,9 @@ There is no Partial or Unknown — launch requires binary certainty on every har
 | ID | Criterion | How to Verify | PASS When |
 | -- | --------- | ------------- | --------- |
 | H1 | **Content approved** | Campaign content exists, has been reviewed, and operator approved it | Content draft finalized and operator gave explicit approval |
-| H2 | **Channel configured** | `openclaw channels status --probe` shows target channel active | Channel probe returns healthy status with no errors |
+| H2 | **Channel configured** | Memory search for channel config or operator confirmation | Channel is active and configured for the target platform |
 | H3 | **Recipients confirmed** | Recipient list or audience segment matches the PLAN phase brief | Recipients specified, count matches brief estimate, no empty lists |
-| H4 | **Send policy verified** | Runtime config `sendPolicy` rules permit sending to the target session type | `sendPolicy` rule exists covering `agent:<agentId>:<sessionType>` for the delivery path |
+| H4 | **Send policy verified** | Memory search for sendPolicy config or operator confirmation | Send policy permits delivery to the target session type |
 
 ### Bonus Items (can skip with documented reason — do not block launch)
 

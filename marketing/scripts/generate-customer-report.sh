@@ -16,7 +16,7 @@
 #   ./generate-customer-report.sh [--output <path>] [--json]
 #
 # Options:
-#   --output <path>   Override output location (default: marketing/status/customer-report.html)
+#   --output <path>   Override output location (default: /tmp/openclaw/customer-report.html)
 #   --json            Output raw collected data as JSON instead of HTML
 #   -h, --help        Show this help
 #
@@ -29,7 +29,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MARKETING_DIR="$(dirname "$SCRIPT_DIR")"
 CUSTOMERS_DIR="$MARKETING_DIR/customers"
-DEFAULT_OUTPUT="$MARKETING_DIR/status/customer-report.html"
+DEFAULT_OUTPUT="/tmp/openclaw/customer-report.html"
 
 # --- Options ---
 OUTPUT_PATH="$DEFAULT_OUTPUT"

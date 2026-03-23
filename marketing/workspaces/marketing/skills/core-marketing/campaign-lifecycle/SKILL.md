@@ -61,7 +61,9 @@ Before starting any phase, load context:
 
 ### Phase 2: PLAN
 
-**Skill**: `campaign-brief`
+**Skill**: `campaign-brief` + `content-calendar`
+
+After creating the brief, use `content-calendar` to plan the content schedule across platforms and date range.
 
 **Required fields** (MUST be specified before advancing to Phase 3):
 
@@ -106,6 +108,10 @@ Before starting any phase, load context:
 **Gate**: Go decision confirmed? → Proceed to Phase 5
 
 ### Phase 5: LAUNCH
+
+**Skill**: `launch-readiness`
+
+Run `launch-readiness` skill first for a scored pre-launch assessment (GO/HOLD/NO-GO). Only proceed if GO.
 
 **Required field**: `recipients` — confirmed recipient list or audience segment (must match Phase 2 PLAN)
 
