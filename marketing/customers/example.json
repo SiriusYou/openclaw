@@ -30,7 +30,9 @@
     "content-repurposing",
     "campaign-decision-gate",
     "weekly-summary",
-    "campaign-retrospective"
+    "campaign-retrospective",
+    "content-calendar",
+    "launch-readiness"
   ],
 
   "reporting": {
