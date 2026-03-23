@@ -24,8 +24,7 @@
     "content-repurposing",
     "campaign-decision-gate",
     "weekly-summary",
-    "campaign-retrospective",
-    "aitoearn-publish"
+    "campaign-retrospective"
   ],
   "reporting": {
     "timezone": "Asia/Shanghai",

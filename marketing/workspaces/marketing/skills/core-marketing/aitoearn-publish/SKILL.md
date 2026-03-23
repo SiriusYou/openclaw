@@ -169,6 +169,9 @@ TikTok, YouTube, Instagram, Twitter/X, Facebook, Pinterest, LinkedIn, Douyin, Xi
 
 ## Notes
 
-- This skill requires `exec` tools (curl). Only available on operator gateway (exec=deny on customer gateways)
-- For customer gateways, use the OpenClaw plugin route instead (future enhancement)
+- **Operator-only skill**: Requires `exec` tools (curl). NOT available on customer gateways (exec=deny). Do NOT add to customer manifest skills lists.
+- For customer gateways, a future OpenClaw plugin extension would register AiToEarn API as native tools (no exec needed)
 - AiToEarn must be running locally via Docker (`cd ~/dev/AiToEarn && docker compose up -d`)
+- **Daemon env vars**: The gateway daemon (LaunchAgent) does NOT inherit shell env vars. To make `AITOEARN_BASE_URL` and `AITOEARN_TOKEN` available to the daemon, either:
+  1. Add them to the operator's runtime config env section, OR
+  2. Write a wrapper script that sources the vars before invoking curl (recommended for JWT tokens that expire)

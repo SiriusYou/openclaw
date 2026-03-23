@@ -131,7 +131,11 @@ describe("No orphan skills", () => {
       }
     }
 
-    const orphans = onDisk.filter((s) => !allManifestSkills.has(s));
+    // Operator-only skills are intentionally excluded from customer manifests
+    // (they require exec tools that customer gateways deny)
+    const operatorOnlySkills = new Set(["aitoearn-publish"]);
+
+    const orphans = onDisk.filter((s) => !allManifestSkills.has(s) && !operatorOnlySkills.has(s));
     expect(orphans, `Skills exist on disk but not in any manifest: ${orphans.join(", ")}`).toEqual(
       [],
     );
