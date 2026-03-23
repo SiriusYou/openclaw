@@ -22,9 +22,11 @@ Score every pre-launch checklist item as PASS or FAIL with concrete evidence, th
 ## Safety Boundaries
 
 - Do NOT auto-send — always present the decision and wait for explicit operator confirmation
-- Do NOT mark a hard item as PASS without verifiable evidence (logs, config output, screenshots)
+- Do NOT mark a hard item as PASS without evidence. Accepted evidence sources:
+  - **Direct**: command output, logs, config values, screenshots
+  - **Operator confirmation**: explicit operator statement that the criterion is met (valid when direct CLI verification is unavailable, e.g. customer gateways with exec=deny)
 - Do NOT proceed past NO-GO without operator override and documented rationale
-- If any evidence is unavailable, score as FAIL (not "Unknown") — launch requires certainty
+- If neither direct evidence nor operator confirmation is available, score as FAIL (not "Unknown")
 
 ## Required Retrieval Steps
 
