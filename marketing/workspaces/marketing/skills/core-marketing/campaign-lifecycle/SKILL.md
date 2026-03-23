@@ -79,7 +79,9 @@ Before starting any phase, load context:
 
 ### Phase 3: CREATE
 
-**Skill**: `content-ab-test` + `content-repurposing`
+**Skill**: `content-ab-test` + `content-repurposing` + `aitoearn-publish` (optional)
+
+**AiToEarn integration** (when available): Use `aitoearn-publish` skill to generate content via AiToEarn AI APIs and adapt it for multiple social media platforms (TikTok, YouTube, Xiaohongshu, etc.). Falls back to manual content creation if AiToEarn is not configured.
 
 1. Draft primary content asset (blog post, landing page, ad copy)
 2. Design A/B test variants using `content-ab-test`
@@ -120,7 +122,7 @@ Bonus (skip if not ready, note reason in weekly-status):
 - [ ] **Short link embedded** [bonus]: campaign URL uses a tracked short link — if not configured, proceed without tracking and record `no_tracking` + reason in weekly-status
 
 1. Validate all hard pre-LAUNCH checklist items. If any hard item fails, return error: `"LAUNCH blocked: <failed item>. Resolve before proceeding."` Log skipped bonus items in weekly-status.
-2. Execute launch per brief timeline and channel plan
+2. Execute launch per brief timeline and channel plan. **AiToEarn integration** (when available): Use `aitoearn-publish` skill to publish content to connected social media accounts via AiToEarn publishing API.
 3. Record launch date, channels activated, short link URL (or `no_tracking` if not configured), and initial distribution metrics
 4. Set up monitoring cadence (daily for first week, then per brief schedule)
 5. Store launch state: `memory_search` then update with launch metadata
