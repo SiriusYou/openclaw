@@ -47,8 +47,8 @@ curl -s -X POST "${AITOEARN_BASE_URL}/api/ai/chat" \
   -H "Authorization: Bearer $AITOEARN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "prompt": "<content brief from campaign-brief skill>",
-    "model": "gpt-4o"
+    "messages": [{"role": "user", "content": "<content brief from campaign-brief skill>"}],
+    "model": "gemini-3-flash-preview"
   }' | jq .
 ```
 
@@ -59,7 +59,7 @@ curl -s -X POST "${AITOEARN_BASE_URL}/api/ai/image/generate/async" \
   -H "Content-Type: application/json" \
   -d '{
     "prompt": "<visual description>",
-    "model": "dall-e-3"
+    "model": "gemini-3.1-flash-image-preview"
   }' | jq .
 ```
 
@@ -164,7 +164,10 @@ TikTok, YouTube, Instagram, Twitter/X, Facebook, Pinterest, LinkedIn, Douyin, Xi
 ## Error Handling
 
 - If `AITOEARN_TOKEN` is expired (401), inform the user to re-authenticate
-- If AiToEarn server is unreachable, check: `curl -sf http://localhost:8080/api/user/mine -H "Authorization: Bearer $AITOEARN_TOKEN"`
+- If AiToEarn server is unreachable, check both endpoints:
+  - User API: `curl -sf http://localhost:8080/api/user/mine -H "Authorization: Bearer $AITOEARN_TOKEN"`
+  - AI API: `curl -sf -X POST http://localhost:8080/api/ai/chat -H "Authorization: Bearer $AITOEARN_TOKEN" -H "Content-Type: application/json" -d '{"messages":[{"role":"user","content":"ping"}],"model":"gemini-3-flash-preview"}'`
+  - Both must succeed for full skill functionality. User API alone does not guarantee AI service availability.
 - Async tasks (image/video generation) require polling — check status every 5-10 seconds
 
 ## Notes
