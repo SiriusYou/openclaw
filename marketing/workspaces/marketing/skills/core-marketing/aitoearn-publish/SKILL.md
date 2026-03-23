@@ -164,10 +164,10 @@ TikTok, YouTube, Instagram, Twitter/X, Facebook, Pinterest, LinkedIn, Douyin, Xi
 ## Error Handling
 
 - If `AITOEARN_TOKEN` is expired (401), inform the user to re-authenticate
-- If AiToEarn server is unreachable, check both endpoints:
-  - User API: `curl -sf http://localhost:8080/api/user/mine -H "Authorization: Bearer $AITOEARN_TOKEN"`
-  - AI API: `curl -sf -X POST http://localhost:8080/api/ai/chat -H "Authorization: Bearer $AITOEARN_TOKEN" -H "Content-Type: application/json" -d '{"messages":[{"role":"user","content":"ping"}],"model":"gemini-3-flash-preview"}'`
-  - Both must succeed for full skill functionality. User API alone does not guarantee AI service availability.
+- If AiToEarn server is unreachable, check both endpoints (use `$AITOEARN_BASE_URL`, not hardcoded localhost):
+  - User API: `curl -sf ${AITOEARN_BASE_URL}/api/user/mine -H "Authorization: Bearer $AITOEARN_TOKEN"`
+  - AI API: `curl -sf -X POST ${AITOEARN_BASE_URL}/api/ai/chat -H "Authorization: Bearer $AITOEARN_TOKEN" -H "Content-Type: application/json" -d '{"messages":[{"role":"user","content":"ping"}],"model":"gemini-3-flash-preview"}'`
+  - Both must succeed for AI generation path availability. User API alone does not guarantee AI service is working. Publishing and analytics endpoints require additional verification (connected social accounts).
 - Async tasks (image/video generation) require polling — check status every 5-10 seconds
 
 ## Notes
