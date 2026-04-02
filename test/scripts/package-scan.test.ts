@@ -62,7 +62,7 @@ describe("MarketClaw Kit — Package Integrity", () => {
     });
   });
 
-  describe("9 core marketing skills", () => {
+  describe("12 core marketing skills", () => {
     const requiredSkills = [
       "campaign-brief",
       "campaign-decision-gate",
@@ -83,9 +83,9 @@ describe("MarketClaw Kit — Package Integrity", () => {
       });
     }
 
-    test("exactly 9 skill directories", () => {
+    test("exactly 12 skill directories", () => {
       const dirs = readdirSync(skillsDir).filter((d) => statSync(join(skillsDir, d)).isDirectory());
-      expect(dirs.length).toBe(9);
+      expect(dirs.length).toBe(12);
     });
   });
 
@@ -148,12 +148,10 @@ describe("MarketClaw Kit — Package Integrity", () => {
       expect(config).toContain("__WORKSPACE_ROOT__");
     });
 
-    test("has no subagents (content-writer/analyst removed)", () => {
+    test("has 5 agents (main + 4 sub-agents)", () => {
       const config = JSON.parse(readFileSync(join(KIT_DIR, "openclaw.json"), "utf8"));
       const agentIds = config.agents.list.map((a: { id: string }) => a.id);
-      expect(agentIds).toEqual(["main"]);
-      expect(agentIds).not.toContain("content-writer");
-      expect(agentIds).not.toContain("analyst");
+      expect(agentIds).toEqual(["main", "content-writer", "analyst", "video-maker", "image-maker"]);
     });
 
     test("does not include clawhub skill", () => {
@@ -171,8 +169,11 @@ describe("MarketClaw Kit — Package Integrity", () => {
     test("primary model matches source config", () => {
       const config = JSON.parse(readFileSync(join(KIT_DIR, "openclaw.json"), "utf8"));
       const mainAgent = config.agents.list[0];
-      expect(mainAgent.model.primary).toBe("google/gemini-3-pro-preview");
-      expect(mainAgent.model.fallbacks).toEqual(["openrouter/auto"]);
+      expect(mainAgent.model.primary).toBe("minimax/MiniMax-M2.7-highspeed");
+      expect(mainAgent.model.fallbacks).toEqual([
+        "openai-codex/gpt-5.4",
+        "google/gemini-3.1-pro-preview",
+      ]);
     });
 
     test("sandbox mode is off", () => {

@@ -16,7 +16,7 @@ const CUSTOMERS_DIR = path.join(REPO_ROOT, "marketing/customers");
 const SHIM_PATH = path.join(REPO_ROOT, "test/scripts/openclaw-shim.sh");
 
 /** Approved provider namespaces for customer model chains. */
-const APPROVED_PROVIDERS = ["openai-codex", "google", "openrouter"];
+const APPROVED_PROVIDERS = ["openai-codex", "google", "openrouter", "minimax"];
 
 /** Host-bound skills that must be denied for customers. */
 const REQUIRED_HOST_DENY = ["things-mac", "tmux", "1password"];

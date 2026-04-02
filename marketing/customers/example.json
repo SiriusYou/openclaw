@@ -17,8 +17,8 @@
   "audience": "Tech-savvy professionals aged 25-45",
 
   "modelProfile": {
-    "primary": "openai-codex/gpt-5.4",
-    "fallbacks": ["google/gemini-3-pro-preview", "openrouter/auto"]
+    "primary": "minimax/MiniMax-M2.7-highspeed",
+    "fallbacks": ["openai-codex/gpt-5.4", "google/gemini-3.1-pro-preview"]
   },
 
   "skills": [

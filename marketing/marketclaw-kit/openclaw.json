@@ -5,14 +5,12 @@
     "port": 18789,
     "trustedProxies": []
   },
-
   "auth": {
     "cooldowns": {
       "billingBackoffHours": 1,
       "billingMaxHours": 12
     }
   },
-
   "logging": {
     "level": "info",
     "redactSensitive": "tools"
@@ -21,15 +19,31 @@
     "enabled": true,
     "flags": ["gateway.*", "session.*", "webhook.*", "agent.*"]
   },
-
   "memory": {
     "backend": "builtin",
     "citations": "auto",
     "qmd": {
       "paths": [
-        { "path": "__WORKSPACE_ROOT__/marketing/memory/", "name": "Marketing Knowledge" },
-        { "path": "__WORKSPACE_ROOT__/marketing/strategies/", "name": "Campaign Strategies" },
-        { "path": "__WORKSPACE_ROOT__/marketing/performance/", "name": "Performance Data" }
+        {
+          "path": "__WORKSPACE_ROOT__/marketing/memory/",
+          "name": "Marketing Knowledge"
+        },
+        {
+          "path": "__WORKSPACE_ROOT__/marketing/strategies/",
+          "name": "Campaign Strategies"
+        },
+        {
+          "path": "__WORKSPACE_ROOT__/marketing/performance/",
+          "name": "Performance Data"
+        },
+        {
+          "path": "__WORKSPACE_ROOT__/analytics/memory/",
+          "name": "Market Research"
+        },
+        {
+          "path": "__WORKSPACE_ROOT__/content/memory/",
+          "name": "Content Guidelines"
+        }
       ],
       "sessions": {
         "enabled": true,
@@ -45,18 +59,16 @@
       }
     }
   },
-
   "agents": {
     "defaults": {
       "model": {
-        "primary": "google/gemini-3-pro-preview",
-        "fallbacks": ["openrouter/auto"]
+        "primary": "minimax/MiniMax-M2.7-highspeed",
+        "fallbacks": ["openai-codex/gpt-5.4", "google/gemini-3.1-pro-preview"]
       },
       "sandbox": {
         "mode": "off"
       }
     },
-
     "list": [
       {
         "id": "main",
@@ -64,8 +76,8 @@
         "name": "Marketing Orchestrator",
         "workspace": "__WORKSPACE_ROOT__/marketing",
         "model": {
-          "primary": "google/gemini-3-pro-preview",
-          "fallbacks": ["openrouter/auto"]
+          "primary": "minimax/MiniMax-M2.7-highspeed",
+          "fallbacks": ["openai-codex/gpt-5.4", "google/gemini-3.1-pro-preview"]
         },
         "skills": [
           "campaign-brief",
@@ -78,45 +90,184 @@
           "weekly-summary",
           "campaign-retrospective"
         ],
+        "subagents": {
+          "allowAgents": ["content-writer", "analyst", "video-maker", "image-maker"],
+          "model": {
+            "primary": "google/gemini-3-flash-preview",
+            "fallbacks": ["openrouter/auto"]
+          }
+        },
+        "tools": {
+          "profile": "full",
+          "alsoAllow": ["memory_search", "memory_get", "sessions_spawn"]
+        },
+        "memorySearch": {
+          "enabled": true
+        },
+        "groupChat": {
+          "mentionPatterns": ["@orchestrator", "@marketing"]
+        },
+        "sandbox": {
+          "mode": "off"
+        }
+      },
+      {
+        "id": "content-writer",
+        "name": "Content Writer",
+        "workspace": "__WORKSPACE_ROOT__/content",
+        "model": {
+          "primary": "minimax/MiniMax-M2.7-highspeed",
+          "fallbacks": ["openai-codex/gpt-5.4", "google/gemini-3.1-pro-preview"]
+        },
+        "skills": ["claw1-content-calendar"],
         "tools": {
           "profile": "full",
           "alsoAllow": ["memory_search", "memory_get"]
         },
-        "memorySearch": { "enabled": true },
-        "groupChat": {
-          "mentionPatterns": ["@orchestrator", "@marketing"]
+        "memorySearch": {
+          "enabled": true
         },
-        "sandbox": { "mode": "off" }
+        "sandbox": {
+          "mode": "off"
+        }
+      },
+      {
+        "id": "analyst",
+        "name": "Marketing Analyst",
+        "workspace": "__WORKSPACE_ROOT__/analytics",
+        "model": {
+          "primary": "minimax/MiniMax-M2.7-highspeed",
+          "fallbacks": ["openai-codex/gpt-5.4", "google/gemini-3.1-pro-preview"]
+        },
+        "skills": ["check-analytics"],
+        "tools": {
+          "profile": "full",
+          "alsoAllow": ["memory_search", "memory_get"]
+        },
+        "memorySearch": {
+          "enabled": true
+        },
+        "sandbox": {
+          "mode": "off"
+        }
+      },
+      {
+        "id": "video-maker",
+        "name": "Video Creator",
+        "workspace": "__WORKSPACE_ROOT__/content",
+        "model": {
+          "primary": "minimax/MiniMax-M2.7-highspeed",
+          "fallbacks": ["openai-codex/gpt-5.4", "google/gemini-3.1-pro-preview"]
+        },
+        "tools": {
+          "profile": "full",
+          "alsoAllow": ["memory_search", "memory_get"]
+        },
+        "memorySearch": {
+          "enabled": true
+        },
+        "sandbox": {
+          "mode": "off"
+        }
+      },
+      {
+        "id": "image-maker",
+        "name": "Image Creator",
+        "workspace": "__WORKSPACE_ROOT__/content",
+        "model": {
+          "primary": "minimax/MiniMax-M2.7-highspeed",
+          "fallbacks": ["openai-codex/gpt-5.4", "google/gemini-3.1-pro-preview"]
+        },
+        "tools": {
+          "profile": "full",
+          "alsoAllow": ["memory_search", "memory_get"]
+        },
+        "memorySearch": {
+          "enabled": true
+        },
+        "sandbox": {
+          "mode": "off"
+        }
       }
     ]
   },
-
   "bindings": [
     {
       "agentId": "main",
-      "match": { "channel": "telegram", "accountId": "*" }
+      "match": {
+        "channel": "telegram",
+        "accountId": "*"
+      }
     }
   ],
-
   "session": {
     "sendPolicy": {
       "default": "deny",
       "rules": [
-        { "action": "allow", "match": { "channel": "telegram" } },
-        { "action": "allow", "match": { "rawKeyPrefix": "agent:main:" } }
+        {
+          "action": "allow",
+          "match": {
+            "channel": "telegram"
+          }
+        },
+        {
+          "action": "allow",
+          "match": {
+            "rawKeyPrefix": "agent:main:"
+          }
+        },
+        {
+          "action": "allow",
+          "match": {
+            "rawKeyPrefix": "agent:content-writer:"
+          }
+        },
+        {
+          "action": "allow",
+          "match": {
+            "rawKeyPrefix": "agent:analyst:"
+          }
+        },
+        {
+          "action": "allow",
+          "match": {
+            "rawKeyPrefix": "agent:video-maker:"
+          }
+        },
+        {
+          "action": "allow",
+          "match": {
+            "rawKeyPrefix": "agent:image-maker:"
+          }
+        }
       ]
     }
   },
-
   "plugins": {
     "enabled": true,
     "entries": {
-      "telegram": { "enabled": true }
+      "telegram": {
+        "enabled": true
+      }
     }
   },
-
   "cron": {
     "enabled": true,
     "maxConcurrentRuns": 3
+  },
+  "models": {
+    "providers": {
+      "minimax": {
+        "baseUrl": "https://api.minimaxi.com/anthropic",
+        "api": "anthropic-messages",
+        "authHeader": true,
+        "models": [
+          {
+            "id": "MiniMax-M2.7-highspeed",
+            "name": "MiniMax M2.7 Highspeed"
+          }
+        ]
+      }
+    }
   }
 }
