@@ -473,6 +473,27 @@ export async function dispatchReplyFromConfig(params: {
     }
   }
 
+  logVerbose(
+    `dispatch-from-config inbound hooks: hasRunner=${hookRunner ? "true" : "false"} hasInboundClaim=${hookRunner?.hasHooks("inbound_claim") ? "true" : "false"} hasBeforeDispatch=${hookRunner?.hasHooks("before_dispatch") ? "true" : "false"} channel=${inboundClaimContext.channelId ?? "none"} conversation=${inboundClaimContext.conversationId ?? "none"} session=${ctx.SessionKey ?? "none"}`,
+  );
+
+  if (hookRunner?.hasHooks("inbound_claim")) {
+    const inboundClaimResult = await hookRunner.runInboundClaim(
+      inboundClaimEvent,
+      inboundClaimContext,
+    );
+    logVerbose(
+      `dispatch-from-config inbound claim result: handled=${inboundClaimResult?.handled ? "true" : "false"} session=${ctx.SessionKey ?? "none"}`,
+    );
+    if (inboundClaimResult?.handled) {
+      recordProcessed("completed", {
+        reason: pluginFallbackReason ?? "inbound_claim_handled",
+      });
+      markIdle("message_completed");
+      return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+    }
+  }
+
   // Trigger plugin hooks (fire-and-forget)
   if (hookRunner?.hasHooks("message_received")) {
     fireAndForgetHook(

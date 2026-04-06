@@ -2285,7 +2285,7 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
-  it("does not broadcast inbound claims without a core-owned plugin binding", async () => {
+  it("runs generic inbound claims before message dispatch when no plugin binding owns the conversation", async () => {
     setNoAbort();
     hookMocks.runner.hasHooks.mockImplementation(
       ((hookName?: string) =>
@@ -2316,38 +2316,27 @@ describe("dispatchReplyFromConfig", () => {
 
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(result).toEqual({ queuedFinal: true, counts: { tool: 0, block: 0, final: 0 } });
-    expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
-    expect(hookMocks.runner.runMessageReceived).toHaveBeenCalledWith(
+    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(hookMocks.runner.runInboundClaim).toHaveBeenCalledWith(
       expect.objectContaining({
-        from: ctx.From,
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "-10099",
         content: "who are you",
-        metadata: expect.objectContaining({
-          messageId: "msg-claim-1",
-          originatingChannel: "telegram",
-          originatingTo: "telegram:-10099",
-          senderId: "user-9",
-          senderUsername: "ada",
-          threadId: 77,
-        }),
+        threadId: 77,
       }),
       expect.objectContaining({
         channelId: "telegram",
         accountId: "default",
-        conversationId: "telegram:-10099",
+        conversationId: "-10099",
+        messageId: "msg-claim-1",
+        senderId: "user-9",
       }),
     );
-    expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "message",
-        action: "received",
-        sessionKey: "agent:main:telegram:group:-10099:77",
-      }),
-    );
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "core reply" }),
-    );
+    expect(hookMocks.runner.runMessageReceived).not.toHaveBeenCalled();
+    expect(internalHookMocks.triggerInternalHook).not.toHaveBeenCalled();
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
   it("emits internal message:received hook when a session key is available", async () => {
@@ -2631,7 +2620,7 @@ describe("dispatchReplyFromConfig", () => {
       .calls[0]?.[0] as ReplyPayload | undefined;
     expect(firstNotice?.text).toContain("is not currently loaded.");
     expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
+    expect(hookMocks.runner.runInboundClaim).toHaveBeenCalledTimes(1);
 
     replyResolver.mockClear();
     hookMocks.runner.runInboundClaim.mockClear();
@@ -2658,7 +2647,67 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(secondDispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
+    expect(hookMocks.runner.runInboundClaim).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets generic inbound claims take over when a bound plugin is missing", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) =>
+        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
+    );
+    hookMocks.runner.runInboundClaim.mockResolvedValue({ handled: true } as never);
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+      status: "missing_plugin",
+    });
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-missing-claim-1",
+      targetSessionKey: "plugin-binding:codex:missing-claim-123",
+      targetKind: "session",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:missing-claim",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "openclaw-codex-app-server",
+        pluginName: "Codex App Server",
+        pluginRoot: "/Users/huntharo/github/openclaw-app-server",
+      },
+    } satisfies SessionBindingRecord);
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "discord:channel:missing-claim",
+        To: "discord:channel:missing-claim",
+        AccountId: "default",
+        MessageSid: "msg-missing-claim-1",
+        SessionKey: "agent:main:discord:channel:missing-claim",
+        CommandBody: "hello",
+        RawBody: "hello",
+        Body: "hello",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    const notice = (dispatcher.sendToolResult as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
+      | ReplyPayload
+      | undefined;
+    expect(notice?.text).toContain("is not currently loaded.");
+    expect(hookMocks.runner.runInboundClaim).toHaveBeenCalledTimes(1);
+    expect(hookMocks.runner.runMessageReceived).not.toHaveBeenCalled();
+    expect(replyResolver).not.toHaveBeenCalled();
   });
 
   it("falls back to OpenClaw when the bound plugin is loaded but has no inbound_claim handler", async () => {
@@ -2716,7 +2765,7 @@ describe("dispatchReplyFromConfig", () => {
       | undefined;
     expect(notice?.text).toContain("is not currently loaded.");
     expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
+    expect(hookMocks.runner.runInboundClaim).toHaveBeenCalledTimes(1);
   });
 
   it("notifies the user when a bound plugin declines the turn and keeps the binding attached", async () => {
