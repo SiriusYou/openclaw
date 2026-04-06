@@ -15,7 +15,7 @@ import { activateSecretsRuntimeSnapshot, prepareSecretsRuntimeSnapshot } from ".
 
 vi.unmock("../version.js");
 
-describe("secrets runtime snapshot auth activation", () => {
+describe("secrets runtime snapshot activation", () => {
   let envSnapshot: SecretsRuntimeEnvSnapshot;
 
   beforeEach(() => {
@@ -26,15 +26,15 @@ describe("secrets runtime snapshot auth activation", () => {
     endSecretsRuntimeIsolationForTest(envSnapshot);
   });
 
-  it("activates runtime snapshots for loadConfig and ensureAuthProfileStore", async () => {
-    await withEnvAsync(
+  async function prepareOpenAiRuntimeSnapshot() {
+    return withEnvAsync(
       {
         OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
         OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
         OPENCLAW_VERSION: undefined,
       },
-      async () => {
-        const prepared = await prepareSecretsRuntimeSnapshot({
+      async () =>
+        prepareSecretsRuntimeSnapshot({
           config: asConfig({
             models: {
               providers: {
@@ -57,18 +57,26 @@ describe("secrets runtime snapshot auth activation", () => {
                 keyRef: OPENAI_ENV_KEY_REF,
               },
             }),
-        });
-
-        activateSecretsRuntimeSnapshot(prepared);
-
-        expect(loadConfig().models?.providers?.openai?.apiKey).toBe("sk-runtime");
-        expect(
-          ensureAuthProfileStore("/tmp/openclaw-agent-main").profiles["openai:default"],
-        ).toMatchObject({
-          type: "api_key",
-          key: "sk-runtime",
-        });
-      },
+        }),
     );
+  }
+
+  it("activates runtime snapshots for loadConfig", async () => {
+    const prepared = await prepareOpenAiRuntimeSnapshot();
+    activateSecretsRuntimeSnapshot(prepared);
+
+    expect(loadConfig().models?.providers?.openai?.apiKey).toBe("sk-runtime");
+  });
+
+  it("activates runtime snapshots for ensureAuthProfileStore", async () => {
+    const prepared = await prepareOpenAiRuntimeSnapshot();
+    activateSecretsRuntimeSnapshot(prepared);
+
+    expect(
+      ensureAuthProfileStore("/tmp/openclaw-agent-main").profiles["openai:default"],
+    ).toMatchObject({
+      type: "api_key",
+      key: "sk-runtime",
+    });
   });
 });

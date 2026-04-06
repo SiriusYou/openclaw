@@ -5,7 +5,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 
-type WebProviderUnderTest = "brave" | "gemini";
+type WebProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "firecrawl";
 
 const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
   resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
@@ -15,19 +15,7 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
 }));
 
-vi.mock("../channels/plugins/bootstrap-registry.js", async () => {
-  const telegramSecrets = await import("../../extensions/telegram/src/secret-contract.ts");
-  return {
-    getBootstrapChannelPlugin: (id: string) =>
-      id === "telegram"
-        ? {
-            secrets: {
-              collectRuntimeConfigAssignments: telegramSecrets.collectRuntimeConfigAssignments,
-            },
-          }
-        : undefined,
-  };
-});
+const OPENAI_ENV_KEY_REF = { source: "env", provider: "default", id: "OPENAI_API_KEY" } as const;
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
@@ -60,7 +48,7 @@ function createTestProvider(params: {
     getCredentialValue: readSearchConfigKey,
     setCredentialValue: (searchConfigTarget, value) => {
       const providerConfig =
-        params.id === "brave"
+        params.id === "brave" || params.id === "firecrawl"
           ? searchConfigTarget
           : ((searchConfigTarget[params.id] ??= {}) as { apiKey?: unknown });
       providerConfig.apiKey = value;
@@ -76,6 +64,12 @@ function createTestProvider(params: {
       const webSearch = (config.webSearch ??= {}) as { apiKey?: unknown };
       webSearch.apiKey = value;
     },
+    resolveRuntimeMetadata:
+      params.id === "perplexity"
+        ? () => ({
+            perplexityTransport: "search_api" as const,
+          })
+        : undefined,
     createTool: () => null,
   };
 }
@@ -84,13 +78,12 @@ function buildTestWebSearchProviders(): PluginWebSearchProviderEntry[] {
   return [
     createTestProvider({ id: "brave", pluginId: "brave", order: 10 }),
     createTestProvider({ id: "gemini", pluginId: "google", order: 20 }),
+    createTestProvider({ id: "grok", pluginId: "xai", order: 30 }),
+    createTestProvider({ id: "kimi", pluginId: "moonshot", order: 40 }),
+    createTestProvider({ id: "perplexity", pluginId: "perplexity", order: 50 }),
+    createTestProvider({ id: "firecrawl", pluginId: "firecrawl", order: 60 }),
   ];
 }
-
-let clearConfigCache: typeof import("../config/config.js").clearConfigCache;
-let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
-let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
-let prepareSecretsRuntimeSnapshot: typeof import("./runtime.js").prepareSecretsRuntimeSnapshot;
 
 function loadAuthStoreWithProfiles(profiles: AuthProfileStore["profiles"]): AuthProfileStore {
   return {
@@ -99,7 +92,12 @@ function loadAuthStoreWithProfiles(profiles: AuthProfileStore["profiles"]): Auth
   };
 }
 
-describe("secrets runtime snapshot inactive surfaces", () => {
+let clearConfigCache: typeof import("../config/config.js").clearConfigCache;
+let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
+let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
+let prepareSecretsRuntimeSnapshot: typeof import("./runtime.js").prepareSecretsRuntimeSnapshot;
+
+describe("secrets runtime snapshot core auth stores", () => {
   beforeAll(async () => {
     ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
     ({ clearSecretsRuntimeSnapshot, prepareSecretsRuntimeSnapshot } = await import("./runtime.js"));
@@ -117,89 +115,45 @@ describe("secrets runtime snapshot inactive surfaces", () => {
     clearConfigCache();
   });
 
-  it("skips inactive-surface refs and emits diagnostics", async () => {
-    const config = asConfig({
-      agents: {
-        defaults: {
-          memorySearch: {
-            enabled: false,
-            remote: {
-              apiKey: { source: "env", provider: "default", id: "DISABLED_MEMORY_API_KEY" },
-            },
-          },
-        },
-      },
-      gateway: {
-        auth: {
-          mode: "token",
-          password: { source: "env", provider: "default", id: "DISABLED_GATEWAY_PASSWORD" },
-        },
-      },
-      channels: {
-        telegram: {
-          botToken: { source: "env", provider: "default", id: "DISABLED_TELEGRAM_BASE_TOKEN" },
-          accounts: {
-            disabled: {
-              enabled: false,
-              botToken: {
-                source: "env",
-                provider: "default",
-                id: "DISABLED_TELEGRAM_ACCOUNT_TOKEN",
-              },
-            },
-          },
-        },
-      },
-      tools: {
-        web: {
-          search: {
-            enabled: false,
-            apiKey: { source: "env", provider: "default", id: "DISABLED_WEB_SEARCH_API_KEY" },
-          },
-        },
-      },
-      plugins: {
-        entries: {
-          google: {
-            config: {
-              webSearch: {
-                apiKey: {
-                  source: "env",
-                  provider: "default",
-                  id: "DISABLED_WEB_SEARCH_GEMINI_API_KEY",
-                },
-              },
-            },
-          },
-        },
-      },
-    });
-
+  it("resolves auth profile SecretRefs from env and inline placeholders", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
-      config,
-      env: {},
+      config: asConfig({}),
+      env: {
+        OPENAI_API_KEY: "sk-env-openai",
+        GITHUB_TOKEN: "ghp-env-token",
+      },
       agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () => loadAuthStoreWithProfiles({}),
+      loadablePluginOrigins: new Map(),
+      loadAuthStore: () =>
+        loadAuthStoreWithProfiles({
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            key: "old-openai",
+            keyRef: OPENAI_ENV_KEY_REF,
+          },
+          "github-copilot:default": {
+            type: "token",
+            provider: "github-copilot",
+            token: "old-gh",
+            tokenRef: { source: "env", provider: "default", id: "GITHUB_TOKEN" },
+          },
+        }),
     });
 
-    expect(snapshot.config.channels?.telegram?.botToken).toEqual({
-      source: "env",
-      provider: "default",
-      id: "DISABLED_TELEGRAM_BASE_TOKEN",
-    });
-    const ignoredInactiveWarnings = snapshot.warnings.filter(
-      (warning) => warning.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-    );
-    expect(ignoredInactiveWarnings.length).toBeGreaterThanOrEqual(6);
     expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
       expect.arrayContaining([
-        "agents.defaults.memorySearch.remote.apiKey",
-        "gateway.auth.password",
-        "channels.telegram.botToken",
-        "channels.telegram.accounts.disabled.botToken",
-        "plugins.entries.brave.config.webSearch.apiKey",
-        "plugins.entries.google.config.webSearch.apiKey",
+        "/tmp/openclaw-agent-main.auth-profiles.openai:default.key",
+        "/tmp/openclaw-agent-main.auth-profiles.github-copilot:default.token",
       ]),
     );
+    expect(snapshot.authStores[0]?.store.profiles["openai:default"]).toMatchObject({
+      type: "api_key",
+      key: "sk-env-openai",
+    });
+    expect(snapshot.authStores[0]?.store.profiles["github-copilot:default"]).toMatchObject({
+      type: "token",
+      token: "ghp-env-token",
+    });
   });
 });

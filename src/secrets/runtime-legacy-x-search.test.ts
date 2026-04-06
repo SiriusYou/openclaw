@@ -1,5 +1,4 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -14,6 +13,20 @@ const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
 vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
 }));
+
+vi.mock("../channels/plugins/bootstrap-registry.js", async () => {
+  const telegramSecrets = await import("../../extensions/telegram/src/secret-contract.ts");
+  return {
+    getBootstrapChannelPlugin: (id: string) =>
+      id === "telegram"
+        ? {
+            secrets: {
+              collectRuntimeConfigAssignments: telegramSecrets.collectRuntimeConfigAssignments,
+            },
+          }
+        : undefined,
+  };
+});
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
@@ -83,21 +96,13 @@ function buildTestWebSearchProviders(): PluginWebSearchProviderEntry[] {
   ];
 }
 
-const OPENAI_ENV_KEY_REF = { source: "env", provider: "default", id: "OPENAI_API_KEY" } as const;
-
-function loadAuthStoreWithProfiles(profiles: AuthProfileStore["profiles"]): AuthProfileStore {
-  return {
-    version: 1,
-    profiles,
-  };
-}
-
 let clearConfigCache: typeof import("../config/config.js").clearConfigCache;
 let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
 let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
 let prepareSecretsRuntimeSnapshot: typeof import("./runtime.js").prepareSecretsRuntimeSnapshot;
+const EMPTY_LOADABLE_PLUGIN_ORIGINS = new Map();
 
-describe("secrets runtime snapshot core env auth", () => {
+describe("secrets runtime snapshot legacy x_search", () => {
   beforeAll(async () => {
     ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
     ({ clearSecretsRuntimeSnapshot, prepareSecretsRuntimeSnapshot } = await import("./runtime.js"));
@@ -115,124 +120,90 @@ describe("secrets runtime snapshot core env auth", () => {
     clearConfigCache();
   });
 
-  it("resolves core env refs for config and auth profiles", async () => {
-    const config = asConfig({
-      agents: {
-        defaults: {
-          memorySearch: {
-            remote: {
-              apiKey: { source: "env", provider: "default", id: "MEMORY_REMOTE_API_KEY" },
-            },
-          },
-        },
-      },
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-            headers: {
-              Authorization: {
-                source: "env",
-                provider: "default",
-                id: "OPENAI_PROVIDER_AUTH_HEADER",
-              },
-            },
-            models: [],
-          },
-        },
-      },
-      skills: {
-        entries: {
-          "review-pr": {
-            enabled: true,
-            apiKey: { source: "env", provider: "default", id: "REVIEW_SKILL_API_KEY" },
-          },
-        },
-      },
-      talk: {
-        providers: {
-          "acme-speech": {
-            apiKey: { source: "env", provider: "default", id: "TALK_PROVIDER_API_KEY" },
-          },
-        },
-      },
-      gateway: {
-        mode: "remote",
-        remote: {
-          url: "wss://gateway.example",
-          token: { source: "env", provider: "default", id: "REMOTE_GATEWAY_TOKEN" },
-          password: { source: "env", provider: "default", id: "REMOTE_GATEWAY_PASSWORD" },
-        },
-      },
-    });
-
+  it("keeps legacy x_search SecretRefs in place until doctor repairs them", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
-      config,
+      config: asConfig({
+        tools: {
+          web: {
+            x_search: {
+              apiKey: { source: "env", provider: "default", id: "X_SEARCH_KEY_REF" },
+              enabled: true,
+              model: "grok-4-1-fast",
+            },
+          },
+        },
+      }),
       env: {
-        OPENAI_API_KEY: "sk-env-openai",
-        OPENAI_PROVIDER_AUTH_HEADER: "Bearer sk-env-header",
-        GITHUB_TOKEN: "ghp-env-token",
-        REVIEW_SKILL_API_KEY: "sk-skill-ref",
-        MEMORY_REMOTE_API_KEY: "mem-ref-key",
-        TALK_PROVIDER_API_KEY: "talk-provider-ref-key",
-        REMOTE_GATEWAY_TOKEN: "remote-token-ref",
-        REMOTE_GATEWAY_PASSWORD: "remote-password-ref",
+        X_SEARCH_KEY_REF: "xai-runtime-key",
       },
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadablePluginOrigins: new Map(),
-      loadAuthStore: () =>
-        loadAuthStoreWithProfiles({
-          "openai:default": {
-            type: "api_key",
-            provider: "openai",
-            key: "old-openai",
-            keyRef: OPENAI_ENV_KEY_REF,
-          },
-          "github-copilot:default": {
-            type: "token",
-            provider: "github-copilot",
-            token: "old-gh",
-            tokenRef: { source: "env", provider: "default", id: "GITHUB_TOKEN" },
-          },
-          "openai:inline": {
-            type: "api_key",
-            provider: "openai",
-            key: "${OPENAI_API_KEY}",
-          },
-        }),
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
     });
 
-    expect(snapshot.config.models?.providers?.openai?.apiKey).toBe("sk-env-openai");
-    expect(snapshot.config.models?.providers?.openai?.headers?.Authorization).toBe(
-      "Bearer sk-env-header",
-    );
-    expect(snapshot.config.skills?.entries?.["review-pr"]?.apiKey).toBe("sk-skill-ref");
-    expect(snapshot.config.agents?.defaults?.memorySearch?.remote?.apiKey).toBe("mem-ref-key");
-    expect((snapshot.config.talk as { apiKey?: unknown } | undefined)?.apiKey).toBeUndefined();
-    expect(snapshot.config.talk?.providers?.["acme-speech"]?.apiKey).toBe("talk-provider-ref-key");
-    expect(snapshot.config.gateway?.remote?.token).toBe("remote-token-ref");
-    expect(snapshot.config.gateway?.remote?.password).toBe("remote-password-ref");
-    expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
-      expect.arrayContaining([
-        "/tmp/openclaw-agent-main.auth-profiles.openai:default.key",
-        "/tmp/openclaw-agent-main.auth-profiles.github-copilot:default.token",
-      ]),
-    );
-    expect(snapshot.authStores[0]?.store.profiles["openai:default"]).toMatchObject({
-      type: "api_key",
-      key: "sk-env-openai",
+    expect((snapshot.config.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual({
+      apiKey: "xai-runtime-key",
+      enabled: true,
+      model: "grok-4-1-fast",
     });
-    expect(snapshot.authStores[0]?.store.profiles["github-copilot:default"]).toMatchObject({
-      type: "token",
-      token: "ghp-env-token",
+    expect(snapshot.config.plugins?.entries?.xai).toBeUndefined();
+    expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("still resolves legacy x_search auth in place even when unrelated legacy config is present", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          web: {
+            x_search: {
+              apiKey: { source: "env", provider: "default", id: "X_SEARCH_KEY_REF" },
+              enabled: true,
+            },
+          },
+        },
+        channels: {
+          telegram: {
+            groupMentionsOnly: true,
+            groups: [],
+          },
+        },
+      }),
+      env: {
+        X_SEARCH_KEY_REF: "xai-runtime-key-invalid-config",
+      },
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
     });
-    expect(snapshot.authStores[0]?.store.profiles["openai:inline"]).toMatchObject({
-      type: "api_key",
-      key: "sk-env-openai",
+
+    expect((snapshot.config.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual({
+      apiKey: "xai-runtime-key-invalid-config",
+      enabled: true,
     });
-    expect(
-      (snapshot.authStores[0].store.profiles["openai:inline"] as Record<string, unknown>).keyRef,
-    ).toEqual({ source: "env", provider: "default", id: "OPENAI_API_KEY" });
+    expect(snapshot.config.plugins?.entries?.xai).toBeUndefined();
+    expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("does not force-enable xai at runtime for knob-only x_search config", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          web: {
+            x_search: {
+              enabled: true,
+              model: "grok-4-1-fast",
+            },
+          },
+        },
+      }),
+      env: {},
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+
+    expect((snapshot.config.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual({
+      enabled: true,
+      model: "grok-4-1-fast",
+    });
+    expect(snapshot.config.plugins?.entries?.xai).toBeUndefined();
+    expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
   });
 });
