@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createYouPetOutboxConsumerSettingsFromConfig,
   YouPetCoreRequestError,
@@ -145,7 +145,13 @@ describe("YouPetOutboxConsumer", () => {
 
     const result = await consumer.pollOnce();
 
-    expect(result).toEqual({ pulled: 5, processed: 5, acknowledged: 5, nacked: 0 });
+    expect(result).toEqual({
+      pulled: 5,
+      processed: 5,
+      acknowledged: 5,
+      nacked: 0,
+      skipped: 0,
+    });
     expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
       "/internal/events/outbox",
       "/internal/events/outbox/evt-wecom.message.received/ack",
@@ -175,7 +181,13 @@ describe("YouPetOutboxConsumer", () => {
 
     const result = await consumer.pollOnce();
 
-    expect(result).toEqual({ pulled: 1, processed: 1, acknowledged: 1, nacked: 0 });
+    expect(result).toEqual({
+      pulled: 1,
+      processed: 1,
+      acknowledged: 1,
+      nacked: 0,
+      skipped: 0,
+    });
     const escalation = requests.find(
       (request) => new URL(request.url).pathname === "/api/v1/tasks/task-1/escalate",
     );
@@ -192,34 +204,50 @@ describe("YouPetOutboxConsumer", () => {
     expect(requests.at(-1)?.url).toContain("/internal/events/outbox/evt-task.missed/ack");
   });
 
-  it("skips task.missed escalation when the Core business payload is missing", async () => {
+  it("nacks malformed task.missed payloads without acknowledging the delivery", async () => {
+    const logger = { warn: vi.fn() };
     const { fetchFn, requests } = createFetch({
       events: [
-        createCoreOutboxEvent("task.missed", {}, {
-          event_id: "evt-task.missed-missing-business",
-          payload: {
-            event_type: "task.missed",
-            event_version: 1,
-            payload: null,
-            producer: "youpet-core",
+        createCoreOutboxEvent(
+          "task.missed",
+          {},
+          {
+            event_id: "evt-task.missed-missing-business",
+            payload: {
+              event_type: "task.missed",
+              event_version: 1,
+              payload: null,
+              producer: "youpet-core",
+            },
           },
-        }),
+        ),
       ],
     });
     const consumer = new YouPetOutboxConsumer({
       coreBaseUrl: "https://core.example.com",
       serviceToken: "svc-token",
       fetchFn,
+      logger,
     });
 
     const result = await consumer.pollOnce();
 
-    expect(result).toEqual({ pulled: 1, processed: 1, acknowledged: 1, nacked: 0 });
+    expect(result).toEqual({
+      pulled: 1,
+      processed: 1,
+      acknowledged: 0,
+      nacked: 1,
+      skipped: 0,
+    });
     expect(
       requests.some((request) => new URL(request.url).pathname.endsWith("/escalate")),
     ).toBe(false);
     expect(requests.at(-1)?.url).toContain(
-      "/internal/events/outbox/evt-task.missed-missing-business/ack",
+      "/internal/events/outbox/evt-task.missed-missing-business/nack",
+    );
+    expect(requests.at(-1)?.body).toEqual({ error: "Malformed YouPet task.missed payload" });
+    expect(logger.warn).toHaveBeenCalledWith(
+      "[youpet] Malformed task.missed event evt-task.missed-missing-business: missing payload.payload",
     );
   });
 
@@ -241,7 +269,13 @@ describe("YouPetOutboxConsumer", () => {
 
     const result = await consumer.pollOnce();
 
-    expect(result).toEqual({ pulled: 1, processed: 1, acknowledged: 1, nacked: 0 });
+    expect(result).toEqual({
+      pulled: 1,
+      processed: 1,
+      acknowledged: 1,
+      nacked: 0,
+      skipped: 0,
+    });
     expect(
       requests.some((request) => new URL(request.url).pathname.endsWith("/escalate")),
     ).toBe(false);
@@ -287,7 +321,13 @@ describe("YouPetOutboxConsumer", () => {
 
     const result = await consumer.pollOnce();
 
-    expect(result).toEqual({ pulled: 1, processed: 1, acknowledged: 0, nacked: 1 });
+    expect(result).toEqual({
+      pulled: 1,
+      processed: 1,
+      acknowledged: 0,
+      nacked: 1,
+      skipped: 0,
+    });
     expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
       "/internal/events/outbox",
       "/internal/events/outbox/evt-task.checkin_received/nack",
@@ -308,7 +348,89 @@ describe("YouPetOutboxConsumer", () => {
 
     const result = await consumer.pollOnce();
 
-    expect(result).toEqual({ pulled: 1, processed: 1, acknowledged: 0, nacked: 1 });
+    expect(result).toEqual({
+      pulled: 1,
+      processed: 1,
+      acknowledged: 0,
+      nacked: 1,
+      skipped: 0,
+    });
+  });
+
+  it("observably acknowledges unknown event types", async () => {
+    const logger = { info: vi.fn() };
+    const { fetchFn, requests } = createFetch({
+      events: [createCoreOutboxEvent("future.event_type", { task_id: "task-1" })],
+    });
+    const consumer = new YouPetOutboxConsumer({
+      coreBaseUrl: "https://core.example.com",
+      serviceToken: "svc-token",
+      fetchFn,
+      logger,
+    });
+
+    const result = await consumer.pollOnce();
+
+    expect(result).toEqual({
+      pulled: 1,
+      processed: 1,
+      acknowledged: 1,
+      nacked: 0,
+      skipped: 0,
+    });
+    expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+      "/internal/events/outbox",
+      "/internal/events/outbox/evt-future.event_type/ack",
+    ]);
+    expect(logger.info).toHaveBeenCalledWith(
+      "[youpet] Acknowledging unhandled outbox event type: future.event_type",
+    );
+  });
+
+  it("skips empty event_id deliveries before dispatch, ack, or nack", async () => {
+    const logger = { error: vi.fn() };
+    const { fetchFn, requests } = createFetch({
+      events: [
+        createCoreOutboxEvent(
+          "task.missed",
+          {
+            task_id: "task-1",
+            missed_count: 2,
+            missed_threshold: 2,
+          },
+          {
+            event_id: "",
+          },
+        ),
+      ],
+    });
+    const consumer = new YouPetOutboxConsumer({
+      coreBaseUrl: "https://core.example.com",
+      serviceToken: "svc-token",
+      fetchFn,
+      logger,
+    });
+
+    const firstResult = await consumer.pollOnce();
+    const secondResult = await consumer.pollOnce();
+
+    expect(firstResult).toEqual({
+      pulled: 1,
+      processed: 1,
+      acknowledged: 0,
+      nacked: 0,
+      skipped: 1,
+    });
+    expect(secondResult).toEqual(firstResult);
+    expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+      "/internal/events/outbox",
+      "/internal/events/outbox",
+    ]);
+    expect(logger.error).toHaveBeenCalledTimes(2);
+    expect(logger.error).toHaveBeenNthCalledWith(
+      1,
+      "[youpet] Skipping outbox item with missing event_id",
+    );
   });
 
   it("builds settings from plugin config with env fallbacks", () => {

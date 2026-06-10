@@ -51,6 +51,7 @@ export interface YouPetOutboxPollResult {
   processed: number;
   acknowledged: number;
   nacked: number;
+  skipped: number;
 }
 
 export interface YouPetOutboxConsumerLogger {
@@ -173,23 +174,47 @@ export class YouPetOutboxConsumer {
         limit: String(this.settings.outboxLimit),
       },
     });
-    const items = Array.isArray(response.items)
-      ? response.items.map((item) => normalizeOutboxEvent(item))
-      : [];
+    const items = Array.isArray(response.items) ? response.items : [];
 
     const result: YouPetOutboxPollResult = {
       pulled: items.length,
       processed: 0,
       acknowledged: 0,
       nacked: 0,
+      skipped: 0,
     };
 
-    for (const item of items) {
+    for (const rawItem of items) {
       result.processed += 1;
+      const rawEventId = readRawEventId(rawItem);
+      if (!rawEventId) {
+        this.settings.logger?.error?.("[youpet] Skipping outbox item with missing event_id");
+        result.skipped += 1;
+        continue;
+      }
+
+      let item: YouPetOutboxEventEnvelope;
+      try {
+        item = normalizeOutboxEvent(rawItem);
+      } catch (error) {
+        const formattedError = formatError(error);
+        this.settings.logger?.warn?.(
+          `[youpet] Nacking malformed outbox item ${rawEventId}: ${formattedError}`,
+        );
+        await this.nack(rawEventId, formattedError);
+        result.nacked += 1;
+        continue;
+      }
+
       try {
         await this.processEvent(item);
       } catch (error) {
-        await this.nack(item.event_id, formatError(error));
+        const formattedError = formatError(error);
+        this.settings.logger?.warn?.(
+          `[youpet] Nacking malformed or failed ${item.event_type} event ${item.event_id}: ` +
+            formattedError,
+        );
+        await this.nack(item.event_id, formattedError);
         result.nacked += 1;
         continue;
       }
@@ -202,10 +227,10 @@ export class YouPetOutboxConsumer {
 
   async processEvent(event: YouPetOutboxEventEnvelope): Promise<void> {
     if (!isYouPetOpenClawEventType(event.event_type)) {
-      if (this.settings.ackUnhandledEvents) {
-        return;
-      }
-      throw new Error(`Unhandled YouPet event type: ${event.event_type}`);
+      this.settings.logger?.info?.(
+        `[youpet] Acknowledging unhandled outbox event type: ${event.event_type}`,
+      );
+      return;
     }
 
     const handler = this.settings.handlers?.[event.event_type];
@@ -266,7 +291,10 @@ export class YouPetOutboxConsumer {
     }
     const payload = readCoreBusinessPayload(event);
     if (!payload) {
-      return;
+      this.settings.logger?.warn?.(
+        `[youpet] Malformed task.missed event ${event.event_id}: missing payload.payload`,
+      );
+      throw new Error("Malformed YouPet task.missed payload");
     }
     const taskId = readString(payload.task_id);
     const missedCount = readPositiveInteger(payload.missed_count);
@@ -409,6 +437,13 @@ function normalizeOutboxEvent(item: unknown): YouPetOutboxEventEnvelope {
     payload: readRecord(row.payload),
     created_at: requireString(row.created_at, "created_at"),
   };
+}
+
+function readRawEventId(item: unknown): string | undefined {
+  if (!item || typeof item !== "object") {
+    return undefined;
+  }
+  return readString((item as Record<string, unknown>).event_id);
 }
 
 function requireDeliveryState(value: unknown): YouPetOutboxDeliveryState {
