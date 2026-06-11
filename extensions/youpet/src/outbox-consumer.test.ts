@@ -30,6 +30,9 @@ function jsonResponse(body: unknown, status = 200): Response {
 function createFetch(routes: {
   events?: YouPetOutboxEventEnvelope[];
   failPath?: string;
+  failStatus?: number;
+  failBody?: unknown;
+  failText?: string;
 }) {
   const requests: CapturedRequest[] = [];
   const fetchFn: YouPetOutboxFetch = async (input, init) => {
@@ -44,7 +47,13 @@ function createFetch(routes: {
     requests.push({ url, method, headers, body });
 
     if (routes.failPath && parsed.pathname === routes.failPath) {
-      return jsonResponse({ detail: { code: "core_error", message: "Core failed" } }, 500);
+      if (routes.failText !== undefined) {
+        return new Response(routes.failText, { status: routes.failStatus ?? 500 });
+      }
+      return jsonResponse(
+        routes.failBody ?? { detail: { code: "core_error", message: "Core failed" } },
+        routes.failStatus ?? 500,
+      );
     }
     if (parsed.pathname === "/internal/events/outbox") {
       return jsonResponse({ items: routes.events ?? [] });
@@ -307,6 +316,119 @@ describe("YouPetOutboxConsumer", () => {
       nacked: 1,
       skipped: 0,
     });
+  });
+
+  it("acknowledges terminal invalid task state conflicts from task escalation", async () => {
+    const logger = { warn: vi.fn() };
+    const { fetchFn, requests } = createFetch({
+      events: [TASK_MISSED_CORE_OUTBOX_EVENT],
+      failPath: "/api/v1/tasks/task-1/escalate",
+      failStatus: 409,
+      failBody: {
+        detail: {
+          code: "invalid_task_state",
+          current_status: "completed",
+          allowed_statuses: ["pending", "reminded", "missed"],
+        },
+      },
+    });
+    const consumer = new YouPetOutboxConsumer({
+      coreBaseUrl: "https://core.example.com",
+      serviceToken: "svc-token",
+      fetchFn,
+      logger,
+    });
+
+    const result = await consumer.pollOnce();
+
+    expect(result).toEqual({
+      pulled: 1,
+      processed: 1,
+      acknowledged: 1,
+      nacked: 0,
+      skipped: 0,
+    });
+    expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+      "/internal/events/outbox",
+      "/api/v1/tasks/task-1/escalate",
+      "/internal/events/outbox/evt-task.missed/ack",
+    ]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("terminal task.missed escalation conflict"),
+    );
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('"event_id":"evt-task.missed"'),
+    );
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('"task_id":"task-1"'));
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('"current_status":"completed"'),
+    );
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('"allowed_statuses":["pending","reminded","missed"]'),
+    );
+  });
+
+  it("nacks task escalation 409 responses with a different error code", async () => {
+    const { fetchFn, requests } = createFetch({
+      events: [TASK_MISSED_CORE_OUTBOX_EVENT],
+      failPath: "/api/v1/tasks/task-1/escalate",
+      failStatus: 409,
+      failBody: {
+        detail: {
+          code: "permission_denied",
+          message: "blocked",
+        },
+      },
+    });
+    const consumer = new YouPetOutboxConsumer({
+      coreBaseUrl: "https://core.example.com",
+      serviceToken: "svc-token",
+      fetchFn,
+    });
+
+    const result = await consumer.pollOnce();
+
+    expect(result).toEqual({
+      pulled: 1,
+      processed: 1,
+      acknowledged: 0,
+      nacked: 1,
+      skipped: 0,
+    });
+    expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+      "/internal/events/outbox",
+      "/api/v1/tasks/task-1/escalate",
+      "/internal/events/outbox/evt-task.missed/nack",
+    ]);
+  });
+
+  it("nacks task escalation 409 responses with a non-JSON body", async () => {
+    const { fetchFn, requests } = createFetch({
+      events: [TASK_MISSED_CORE_OUTBOX_EVENT],
+      failPath: "/api/v1/tasks/task-1/escalate",
+      failStatus: 409,
+      failText: "conflict",
+    });
+    const consumer = new YouPetOutboxConsumer({
+      coreBaseUrl: "https://core.example.com",
+      serviceToken: "svc-token",
+      fetchFn,
+    });
+
+    const result = await consumer.pollOnce();
+
+    expect(result).toEqual({
+      pulled: 1,
+      processed: 1,
+      acknowledged: 0,
+      nacked: 1,
+      skipped: 0,
+    });
+    expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+      "/internal/events/outbox",
+      "/api/v1/tasks/task-1/escalate",
+      "/internal/events/outbox/evt-task.missed/nack",
+    ]);
   });
 
   it("observably acknowledges unknown event types", async () => {

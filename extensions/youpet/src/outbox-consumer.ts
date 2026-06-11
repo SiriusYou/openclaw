@@ -306,15 +306,30 @@ export class YouPetOutboxConsumer {
       return;
     }
 
-    await this.requestJson<unknown>(`/api/v1/tasks/${encodeURIComponent(taskId)}/escalate`, {
-      method: "POST",
-      body: {
-        severity: "medium",
-        summary: "Task missed the configured YouPet check-in threshold.",
-      },
-      idempotencyKey: `openclaw:youpet:${event.event_id}:escalate`,
-      correlationId: event.correlation_id ?? undefined,
-    });
+    try {
+      await this.requestJson<unknown>(`/api/v1/tasks/${encodeURIComponent(taskId)}/escalate`, {
+        method: "POST",
+        body: {
+          severity: "medium",
+          summary: "Task missed the configured YouPet check-in threshold.",
+        },
+        idempotencyKey: `openclaw:youpet:${event.event_id}:escalate`,
+        correlationId: event.correlation_id ?? undefined,
+      });
+    } catch (error) {
+      const conflict = readInvalidTaskStateConflict(error);
+      if (!conflict) {
+        throw error;
+      }
+      this.settings.logger?.warn?.(
+        `[youpet] Acknowledging terminal task.missed escalation conflict ${JSON.stringify({
+          event_id: event.event_id,
+          task_id: taskId,
+          current_status: conflict.currentStatus ?? null,
+          allowed_statuses: conflict.allowedStatuses ?? [],
+        })}`,
+      );
+    }
   }
 
   private async requestJson<T>(
@@ -488,6 +503,30 @@ function readCoreBusinessPayload(
   // Core stores an event envelope in the outbox row; business fields live under
   // payload.payload. Reading the row-level payload silently skips escalation.
   return readOptionalRecord(event.payload.payload);
+}
+
+function readInvalidTaskStateConflict(
+  error: unknown,
+): { currentStatus: string | undefined; allowedStatuses: string[] | undefined } | undefined {
+  if (!(error instanceof YouPetCoreRequestError) || error.status !== 409) {
+    return undefined;
+  }
+  let body: unknown;
+  try {
+    body = JSON.parse(error.responseBody);
+  } catch {
+    return undefined;
+  }
+  const detail = readOptionalRecord(readOptionalRecord(body)?.detail);
+  if (!detail || detail.code !== "invalid_task_state") {
+    return undefined;
+  }
+  return {
+    currentStatus: typeof detail.current_status === "string" ? detail.current_status : undefined,
+    allowedStatuses: Array.isArray(detail.allowed_statuses)
+      ? detail.allowed_statuses.filter((value): value is string => typeof value === "string")
+      : undefined,
+  };
 }
 
 function readPositiveInteger(value: unknown): number | undefined {
