@@ -15,6 +15,8 @@ export type YouPetFlowRecord = {
   plan_id: string;
   pet_id?: string;
   status: "active";
+  core_linked: boolean;
+  core_linked_at: string | null;
   correlation_id: string | null;
   created_from_event_id: string;
   checkin_count: number;
@@ -47,6 +49,7 @@ export type YouPetFlowStore = {
   }) => YouPetFlowRecord;
   lookupFlowByPlanId: (planId: string) => YouPetFlowRecord | undefined;
   lookupProcessedEvent: (eventId: string) => YouPetProcessedEventRecord | undefined;
+  markFlowCoreLinked: (planId: string) => YouPetFlowRecord;
 };
 
 export type YouPetFlowStoreRuntimeState = {
@@ -114,6 +117,25 @@ export function createYouPetFlowStore(stores: YouPetFlowStoreStores): YouPetFlow
     lookupProcessedEvent(eventId) {
       return stores.processedEvents.lookup(toYouPetProcessedEventKey(eventId));
     },
+    markFlowCoreLinked(planId) {
+      const flowKey = toYouPetFlowPlanKey(planId);
+      const existing = stores.flows.lookup(flowKey);
+      if (!existing) {
+        throw new Error("YouPet flow core-link marker references a missing flow record");
+      }
+      if (existing.core_linked) {
+        return existing;
+      }
+      const now = new Date().toISOString();
+      const linked = {
+        ...existing,
+        core_linked: true,
+        core_linked_at: now,
+        updated_at: now,
+      };
+      stores.flows.register(flowKey, linked);
+      return linked;
+    },
   };
 }
 
@@ -137,6 +159,8 @@ function createActiveFlowRecord(params: {
     plan_id: params.planId,
     ...(params.petId ? { pet_id: params.petId } : {}),
     status: "active",
+    core_linked: false,
+    core_linked_at: null,
     correlation_id: params.correlationId,
     created_from_event_id: params.eventId,
     checkin_count: 0,

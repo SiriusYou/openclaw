@@ -38,6 +38,9 @@ function createFetch(events: ReturnType<typeof createCoreOutboxEvent>[]) {
     if (parsed.pathname === "/internal/events/outbox") {
       return jsonResponse({ items: events });
     }
+    if (parsed.pathname.match(/^\/api\/v1\/health-plans\/[^/]+\/flow$/)) {
+      return jsonResponse({ ok: true });
+    }
     if (parsed.pathname.endsWith("/ack")) {
       return jsonResponse({
         event_id: parsed.pathname.split("/").at(-2),
@@ -130,14 +133,20 @@ describe("youpet plugin registration", () => {
       plan_id: "plan-1",
       pet_id: "pet-1",
       status: "active",
+      core_linked: true,
       correlation_id: "corr-flow",
     });
     expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
       "/internal/events/outbox",
+      "/api/v1/health-plans/plan-1/flow",
       "/internal/events/outbox/evt-health_plan.activated/ack",
     ]);
-    expect(requests.some((request) => new URL(request.url).pathname.startsWith("/api/v1/"))).toBe(
-      false,
+    const writeback = requests.find(
+      (request) => new URL(request.url).pathname === "/api/v1/health-plans/plan-1/flow",
     );
+    expect(writeback?.method).toBe("POST");
+    expect(writeback?.body).toEqual({
+      openclaw_flow_id: flowStore.lookupFlowByPlanId("plan-1")?.flow_id,
+    });
   });
 });

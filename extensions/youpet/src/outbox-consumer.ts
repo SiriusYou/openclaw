@@ -249,7 +249,7 @@ export class YouPetOutboxConsumer {
     // Production flow behavior is built in here; settings.handlers remains only
     // an override seam, so config-only installs cannot ack-drop supported flows.
     if (event.event_type === "health_plan.activated") {
-      this.handleHealthPlanActivated(event);
+      await this.handleHealthPlanActivated(event);
       return;
     }
 
@@ -346,7 +346,7 @@ export class YouPetOutboxConsumer {
     }
   }
 
-  private handleHealthPlanActivated(event: YouPetOutboxEventEnvelope): void {
+  private async handleHealthPlanActivated(event: YouPetOutboxEventEnvelope): Promise<void> {
     if (!this.settings.manageFlows) {
       return;
     }
@@ -369,7 +369,7 @@ export class YouPetOutboxConsumer {
     }
 
     const petId = readString(payload.pet_id)?.trim();
-    this.settings.flowStore.recordHealthPlanActivated({
+    const flow = this.settings.flowStore.recordHealthPlanActivated({
       eventId: event.event_id,
       eventType: event.event_type,
       aggregateId: event.aggregate_id || null,
@@ -377,6 +377,38 @@ export class YouPetOutboxConsumer {
       ...(petId ? { petId } : {}),
       correlationId: event.correlation_id ?? null,
     });
+    // Flow creation is event-ledgered, but Core writeback is a separate
+    // completion step. Gate on the link marker so a failed writeback can retry
+    // on redelivery even when the activation event is already ledgered.
+    if (flow.core_linked) {
+      return;
+    }
+
+    try {
+      await this.requestJson<unknown>(`/api/v1/health-plans/${encodeURIComponent(planId)}/flow`, {
+        method: "POST",
+        body: {
+          openclaw_flow_id: flow.flow_id,
+        },
+        idempotencyKey: `openclaw:youpet:${event.event_id}:flow-link`,
+        correlationId: event.correlation_id ?? undefined,
+      });
+      this.settings.flowStore.markFlowCoreLinked(planId);
+    } catch (error) {
+      const conflict = readFlowIdConflict(error);
+      if (!conflict) {
+        throw error;
+      }
+      this.settings.logger?.warn?.(
+        `[youpet] Acknowledging terminal health_plan.activated flow-link conflict ${JSON.stringify({
+          event_id: event.event_id,
+          plan_id: planId,
+          current_flow_id: conflict.currentFlowId ?? null,
+          attempted_flow_id: conflict.attemptedFlowId ?? null,
+        })}`,
+      );
+      this.settings.flowStore.markFlowCoreLinked(planId);
+    }
   }
 
   private async requestJson<T>(
@@ -580,6 +612,28 @@ function readInvalidTaskStateConflict(
     allowedStatuses: Array.isArray(detail.allowed_statuses)
       ? detail.allowed_statuses.filter((value): value is string => typeof value === "string")
       : undefined,
+  };
+}
+
+function readFlowIdConflict(
+  error: unknown,
+): { currentFlowId: string | undefined; attemptedFlowId: string | undefined } | undefined {
+  if (!(error instanceof YouPetCoreRequestError) || error.status !== 409) {
+    return undefined;
+  }
+  let body: unknown;
+  try {
+    body = JSON.parse(error.responseBody);
+  } catch {
+    return undefined;
+  }
+  const detail = readOptionalRecord(readOptionalRecord(body)?.detail);
+  if (!detail || detail.code !== "flow_id_conflict") {
+    return undefined;
+  }
+  return {
+    currentFlowId: readString(detail.current_flow_id),
+    attemptedFlowId: readString(detail.attempted_flow_id),
   };
 }
 

@@ -45,6 +45,8 @@ describe("YouPet flow store", () => {
       plan_id: "plan-1",
       pet_id: "pet-1",
       status: "active",
+      core_linked: false,
+      core_linked_at: null,
       correlation_id: "corr-1",
       created_from_event_id: "evt-health-plan-1",
       checkin_count: 0,
@@ -84,6 +86,34 @@ describe("YouPet flow store", () => {
     expect(flows.entries()).toHaveLength(1);
     expect(processedEvents.entries()).toHaveLength(2);
     expect(flowStore.lookupFlowByPlanId("plan-1")?.correlation_id).toBe("corr-1");
+  });
+
+  it("marks a flow as linked to Core without mutating the original record", () => {
+    const { flowStore, flows } = createYouPetTestFlowStore(createYouPetTempStateEnv());
+
+    const created = flowStore.recordHealthPlanActivated({
+      eventId: "evt-health-plan-1",
+      eventType: "health_plan.activated",
+      aggregateId: "plan-1",
+      planId: "plan-1",
+      petId: "pet-1",
+      correlationId: "corr-1",
+    });
+    const linked = flowStore.markFlowCoreLinked("plan-1");
+    const replay = flowStore.markFlowCoreLinked("plan-1");
+
+    expect(created.core_linked).toBe(false);
+    expect(created.core_linked_at).toBeNull();
+    expect(linked).not.toBe(created);
+    expect(linked).toMatchObject({
+      flow_id: created.flow_id,
+      plan_id: "plan-1",
+      core_linked: true,
+    });
+    expect(linked.core_linked_at).toEqual(expect.any(String));
+    expect(linked.updated_at).toBe(linked.core_linked_at);
+    expect(replay).toEqual(linked);
+    expect(flows.entries()).toHaveLength(1);
   });
 
   it("persists flow and ledger records across store close and reopen", async () => {
