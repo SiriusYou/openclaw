@@ -10,7 +10,8 @@
     "envVars": [
       "YOUPET_OPENCLAW_ENABLED",
       "YOUPET_CORE_BASE_URL",
-      "YOUPET_SERVICE_TOKEN"
+      "YOUPET_SERVICE_TOKEN",
+      "YOUPET_OPENCLAW_MANAGE_FLOWS"
     ]
   },
   "configSchema": {
@@ -52,6 +53,10 @@
         "default": true
       },
       "escalateMissedTasks": {
+        "type": "boolean",
+        "default": true
+      },
+      "manageFlows": {
         "type": "boolean",
         "default": true
       }

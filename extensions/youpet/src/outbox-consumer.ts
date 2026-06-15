@@ -1,3 +1,5 @@
+import type { YouPetFlowStore } from "./flow-store.js";
+
 export const SUPPORTED_YOUPET_OPENCLAW_EVENT_TYPES = [
   "wecom.message.received",
   "health_plan.activated",
@@ -79,26 +81,29 @@ export interface YouPetOutboxConsumerSettings {
   pollIntervalMs?: number;
   ackUnhandledEvents?: boolean;
   escalateMissedTasks?: boolean;
+  manageFlows?: boolean;
+  flowStore?: YouPetFlowStore;
   fetchFn?: YouPetOutboxFetch;
   logger?: YouPetOutboxConsumerLogger;
   handlers?: Partial<Record<YouPetOpenClawEventType, YouPetOutboxEventHandler>>;
 }
 
-export interface ResolvedYouPetOutboxConsumerSettings
-  extends Required<
-    Pick<
-      YouPetOutboxConsumerSettings,
-      | "enabled"
-      | "coreBaseUrl"
-      | "serviceToken"
-      | "actorId"
-      | "outboxConsumer"
-      | "outboxLimit"
-      | "pollIntervalMs"
-      | "ackUnhandledEvents"
-      | "escalateMissedTasks"
-    >
-  > {
+export interface ResolvedYouPetOutboxConsumerSettings extends Required<
+  Pick<
+    YouPetOutboxConsumerSettings,
+    | "enabled"
+    | "coreBaseUrl"
+    | "serviceToken"
+    | "actorId"
+    | "outboxConsumer"
+    | "outboxLimit"
+    | "pollIntervalMs"
+    | "ackUnhandledEvents"
+    | "escalateMissedTasks"
+    | "manageFlows"
+  >
+> {
+  flowStore?: YouPetFlowStore;
   fetchFn?: YouPetOutboxFetch;
   logger?: YouPetOutboxConsumerLogger;
   handlers?: Partial<Record<YouPetOpenClawEventType, YouPetOutboxEventHandler>>;
@@ -142,6 +147,8 @@ export class YouPetOutboxConsumer {
       pollIntervalMs: clampInteger(settings.pollIntervalMs, 5_000, 1_000, 60 * 60 * 1_000),
       ackUnhandledEvents: settings.ackUnhandledEvents ?? true,
       escalateMissedTasks: settings.escalateMissedTasks ?? true,
+      manageFlows: settings.manageFlows ?? true,
+      flowStore: settings.flowStore,
       fetchFn,
       logger: settings.logger,
       handlers: settings.handlers,
@@ -239,6 +246,13 @@ export class YouPetOutboxConsumer {
       return;
     }
 
+    // Production flow behavior is built in here; settings.handlers remains only
+    // an override seam, so config-only installs cannot ack-drop supported flows.
+    if (event.event_type === "health_plan.activated") {
+      this.handleHealthPlanActivated(event);
+      return;
+    }
+
     if (event.event_type === "task.missed") {
       await this.handleTaskMissed(event);
     }
@@ -332,6 +346,39 @@ export class YouPetOutboxConsumer {
     }
   }
 
+  private handleHealthPlanActivated(event: YouPetOutboxEventEnvelope): void {
+    if (!this.settings.manageFlows) {
+      return;
+    }
+    const payload = readCoreBusinessPayload(event);
+    if (!payload) {
+      this.settings.logger?.warn?.(
+        `[youpet] Malformed health_plan.activated event ${event.event_id}: missing payload.payload`,
+      );
+      throw new Error("Malformed YouPet health_plan.activated payload");
+    }
+    const planId = readString(payload.plan_id)?.trim();
+    if (!planId) {
+      this.settings.logger?.warn?.(
+        `[youpet] Malformed health_plan.activated event ${event.event_id}: missing plan_id`,
+      );
+      throw new Error("Malformed YouPet health_plan.activated payload");
+    }
+    if (!this.settings.flowStore) {
+      throw new Error("YouPet health_plan.activated handling requires a flow store");
+    }
+
+    const petId = readString(payload.pet_id)?.trim();
+    this.settings.flowStore.recordHealthPlanActivated({
+      eventId: event.event_id,
+      eventType: event.event_type,
+      aggregateId: event.aggregate_id || null,
+      planId,
+      ...(petId ? { petId } : {}),
+      correlationId: event.correlation_id ?? null,
+    });
+  }
+
   private async requestJson<T>(
     path: string,
     options: {
@@ -403,7 +450,13 @@ export function createYouPetOutboxConsumerSettingsFromConfig(params: {
       "openclaw-youpet-consumer",
     ),
     outboxConsumer: "openclaw",
-    outboxLimit: readConfigInteger(config.outboxLimit, env.YOUPET_OPENCLAW_OUTBOX_LIMIT, 20, 1, 500),
+    outboxLimit: readConfigInteger(
+      config.outboxLimit,
+      env.YOUPET_OPENCLAW_OUTBOX_LIMIT,
+      20,
+      1,
+      500,
+    ),
     pollIntervalMs: readConfigInteger(
       config.pollIntervalMs,
       env.YOUPET_OPENCLAW_POLL_INTERVAL_MS,
@@ -421,6 +474,7 @@ export function createYouPetOutboxConsumerSettingsFromConfig(params: {
       env.YOUPET_OPENCLAW_ESCALATE_MISSED_TASKS,
       true,
     ),
+    manageFlows: readConfigBoolean(config.manageFlows, env.YOUPET_OPENCLAW_MANAGE_FLOWS, true),
   };
 }
 
@@ -554,7 +608,11 @@ function readConfigString(value: unknown, envValue: string | undefined, fallback
   return fallback;
 }
 
-function readConfigBoolean(value: unknown, envValue: string | undefined, fallback: boolean): boolean {
+function readConfigBoolean(
+  value: unknown,
+  envValue: string | undefined,
+  fallback: boolean,
+): boolean {
   if (typeof value === "boolean") {
     return value;
   }

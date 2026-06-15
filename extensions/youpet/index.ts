@@ -1,4 +1,5 @@
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { openYouPetFlowStore } from "./src/flow-store.js";
 import {
   createYouPetOutboxConsumerSettingsFromConfig,
   isYouPetOutboxConsumerConfigured,
@@ -11,6 +12,7 @@ const plugin = definePluginEntry({
   description: "Consumes YouPet Core outbox deliveries for orchestration actions.",
   register(api: OpenClawPluginApi) {
     let consumer: YouPetOutboxConsumer | undefined;
+    const flowStore = openYouPetFlowStore(api.runtime.state);
 
     api.registerService({
       id: "youpet-outbox-consumer",
@@ -31,6 +33,7 @@ const plugin = definePluginEntry({
 
         consumer = new YouPetOutboxConsumer({
           ...settings,
+          flowStore,
           logger: ctx.logger,
         });
         consumer.startPolling();

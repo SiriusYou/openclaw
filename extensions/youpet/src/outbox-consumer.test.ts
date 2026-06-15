@@ -41,9 +41,7 @@ function createFetch(routes: {
     const method = init?.method ?? "GET";
     const headers = Object.fromEntries(new Headers(init?.headers).entries());
     const body =
-      typeof init?.body === "string" && init.body.length > 0
-        ? JSON.parse(init.body)
-        : undefined;
+      typeof init?.body === "string" && init.body.length > 0 ? JSON.parse(init.body) : undefined;
     requests.push({ url, method, headers, body });
 
     if (routes.failPath && parsed.pathname === routes.failPath) {
@@ -88,14 +86,13 @@ describe("YouPetOutboxConsumer", () => {
   it("pulls Core-envelope OpenClaw events and acknowledges handled no-op events", async () => {
     const handledNoOpEvents = [
       "wecom.message.received",
-      "health_plan.activated",
       "task.checkin_received",
       "alert.acknowledged",
       "alert.resolved",
     ];
     const { fetchFn, requests } = createFetch({
       events: handledNoOpEvents.map((eventType) =>
-        createCoreOutboxEvent(eventType, { task_id: "task-1" })
+        createCoreOutboxEvent(eventType, { task_id: "task-1" }),
       ),
     });
     const consumer = new YouPetOutboxConsumer({
@@ -107,16 +104,15 @@ describe("YouPetOutboxConsumer", () => {
     const result = await consumer.pollOnce();
 
     expect(result).toEqual({
-      pulled: 5,
-      processed: 5,
-      acknowledged: 5,
+      pulled: 4,
+      processed: 4,
+      acknowledged: 4,
       nacked: 0,
       skipped: 0,
     });
     expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
       "/internal/events/outbox",
       "/internal/events/outbox/evt-wecom.message.received/ack",
-      "/internal/events/outbox/evt-health_plan.activated/ack",
       "/internal/events/outbox/evt-task.checkin_received/ack",
       "/internal/events/outbox/evt-alert.acknowledged/ack",
       "/internal/events/outbox/evt-alert.resolved/ack",
@@ -125,9 +121,9 @@ describe("YouPetOutboxConsumer", () => {
     expect(new URL(requests[0]?.url ?? "").searchParams.get("limit")).toBe("20");
     expect(requests[0]?.headers.authorization).toBe("Bearer svc-token");
     expect(requests[0]?.headers["x-actor-id"]).toBe("openclaw-youpet-consumer");
-    expect(
-      requests.some((request) => new URL(request.url).pathname.endsWith("/escalate")),
-    ).toBe(false);
+    expect(requests.some((request) => new URL(request.url).pathname.endsWith("/escalate"))).toBe(
+      false,
+    );
   });
 
   it("escalates missed tasks once the Core threshold is reached", async () => {
@@ -159,9 +155,7 @@ describe("YouPetOutboxConsumer", () => {
         summary: "Task missed the configured YouPet check-in threshold.",
       },
     });
-    expect(escalation?.headers["idempotency-key"]).toBe(
-      "openclaw:youpet:evt-task.missed:escalate",
-    );
+    expect(escalation?.headers["idempotency-key"]).toBe("openclaw:youpet:evt-task.missed:escalate");
     expect(requests.at(-1)?.url).toContain("/internal/events/outbox/evt-task.missed/ack");
   });
 
@@ -200,9 +194,9 @@ describe("YouPetOutboxConsumer", () => {
       nacked: 1,
       skipped: 0,
     });
-    expect(
-      requests.some((request) => new URL(request.url).pathname.endsWith("/escalate")),
-    ).toBe(false);
+    expect(requests.some((request) => new URL(request.url).pathname.endsWith("/escalate"))).toBe(
+      false,
+    );
     expect(requests.at(-1)?.url).toContain(
       "/internal/events/outbox/evt-task.missed-missing-business/nack",
     );
@@ -237,9 +231,9 @@ describe("YouPetOutboxConsumer", () => {
       nacked: 0,
       skipped: 0,
     });
-    expect(
-      requests.some((request) => new URL(request.url).pathname.endsWith("/escalate")),
-    ).toBe(false);
+    expect(requests.some((request) => new URL(request.url).pathname.endsWith("/escalate"))).toBe(
+      false,
+    );
   });
 
   it("uses the same escalation idempotency key for redelivered task.missed events", async () => {
@@ -513,10 +507,12 @@ describe("YouPetOutboxConsumer", () => {
         enabled: true,
         coreBaseUrl: "https://cfg.example.com/",
         outboxLimit: 10,
+        manageFlows: false,
       },
       env: {
         YOUPET_SERVICE_TOKEN: "env-token",
         YOUPET_OPENCLAW_POLL_INTERVAL_MS: "2500",
+        YOUPET_OPENCLAW_MANAGE_FLOWS: "true",
       },
     });
 
@@ -525,6 +521,7 @@ describe("YouPetOutboxConsumer", () => {
     expect(settings.serviceToken).toBe("env-token");
     expect(settings.outboxLimit).toBe(10);
     expect(settings.pollIntervalMs).toBe(2500);
+    expect(settings.manageFlows).toBe(false);
   });
 
   it("wraps non-2xx Core responses", async () => {
