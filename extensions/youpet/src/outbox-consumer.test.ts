@@ -84,12 +84,7 @@ function createFetch(routes: {
 
 describe("YouPetOutboxConsumer", () => {
   it("pulls Core-envelope OpenClaw events and acknowledges handled no-op events", async () => {
-    const handledNoOpEvents = [
-      "wecom.message.received",
-      "task.checkin_received",
-      "alert.acknowledged",
-      "alert.resolved",
-    ];
+    const handledNoOpEvents = ["wecom.message.received", "alert.acknowledged", "alert.resolved"];
     const { fetchFn, requests } = createFetch({
       events: handledNoOpEvents.map((eventType) =>
         createCoreOutboxEvent(eventType, { task_id: "task-1" }),
@@ -104,16 +99,15 @@ describe("YouPetOutboxConsumer", () => {
     const result = await consumer.pollOnce();
 
     expect(result).toEqual({
-      pulled: 4,
-      processed: 4,
-      acknowledged: 4,
+      pulled: 3,
+      processed: 3,
+      acknowledged: 3,
       nacked: 0,
       skipped: 0,
     });
     expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
       "/internal/events/outbox",
       "/internal/events/outbox/evt-wecom.message.received/ack",
-      "/internal/events/outbox/evt-task.checkin_received/ack",
       "/internal/events/outbox/evt-alert.acknowledged/ack",
       "/internal/events/outbox/evt-alert.resolved/ack",
     ]);

@@ -149,4 +149,71 @@ describe("youpet plugin registration", () => {
       openclaw_flow_id: flowStore.lookupFlowByPlanId("plan-1")?.flow_id,
     });
   });
+
+  it("wires task check-in flow advancement through the production outbox service path", async () => {
+    const env = createYouPetTempStateEnv();
+    const runtimeState = createYouPetTestRuntimeState(env);
+    const openSyncKeyedStore = vi.fn(runtimeState.openSyncKeyedStore);
+    const registerService = vi.fn();
+    const { fetchFn, requests } = createFetch([
+      createCoreOutboxEvent(
+        "task.checkin_received",
+        {
+          task_id: "task-1",
+          checkin_id: "checkin-1",
+          plan_id: "plan-1",
+          pet_id: "pet-1",
+        },
+        {
+          aggregate_type: "checkin",
+          aggregate_id: "checkin-1",
+          correlation_id: "corr-checkin",
+        },
+      ),
+    ]);
+    vi.stubGlobal("fetch", fetchFn);
+
+    plugin.register(
+      createTestPluginApi({
+        id: "youpet",
+        name: "YouPet Core",
+        source: "test",
+        pluginConfig: {
+          enabled: true,
+          coreBaseUrl: "https://core.example.com",
+          serviceToken: "svc-token",
+          pollIntervalMs: 60_000,
+        },
+        runtime: { state: { openSyncKeyedStore } } as never,
+        registerService,
+      }),
+    );
+    const service = registerService.mock.calls.at(0)?.at(0);
+    if (!service) {
+      throw new Error("expected youpet plugin to register the outbox service");
+    }
+
+    service.start({
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      stateDir: "",
+      config: {},
+    });
+    await waitForRequestCount(requests, 2);
+    service.stop?.();
+
+    const flowStore = createYouPetTestFlowStore(env).flowStore;
+    expect(openSyncKeyedStore).toHaveBeenCalledTimes(2);
+    expect(flowStore.lookupFlowByPlanId("plan-1")).toMatchObject({
+      plan_id: "plan-1",
+      pet_id: "pet-1",
+      status: "active",
+      core_linked: false,
+      correlation_id: "corr-checkin",
+      checkin_count: 1,
+    });
+    expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+      "/internal/events/outbox",
+      "/internal/events/outbox/evt-task.checkin_received/ack",
+    ]);
+  });
 });

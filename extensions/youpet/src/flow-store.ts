@@ -47,6 +47,15 @@ export type YouPetFlowStore = {
     petId?: string;
     correlationId: string | null;
   }) => YouPetFlowRecord;
+  recordTaskCheckin: (params: {
+    eventId: string;
+    eventType: string;
+    aggregateId: string | null;
+    planId: string;
+    checkinId: string;
+    petId?: string;
+    correlationId: string | null;
+  }) => YouPetFlowRecord;
   lookupFlowByPlanId: (planId: string) => YouPetFlowRecord | undefined;
   lookupProcessedEvent: (eventId: string) => YouPetProcessedEventRecord | undefined;
   markFlowCoreLinked: (planId: string) => YouPetFlowRecord;
@@ -110,6 +119,54 @@ export function createYouPetFlowStore(stores: YouPetFlowStoreStores): YouPetFlow
         processed_at: processedAt,
       });
       return flow;
+    },
+    recordTaskCheckin(params) {
+      const flowKey = toYouPetFlowPlanKey(params.planId);
+      const processedKey = toYouPetProcessedEventKey(params.eventId);
+      const existingProcessedEvent = stores.processedEvents.lookup(processedKey);
+      if (existingProcessedEvent) {
+        const existingFlow = stores.flows.lookup(flowKey);
+        if (!existingFlow) {
+          throw new Error("YouPet flow ledger references a missing flow record");
+        }
+        return existingFlow;
+      }
+
+      let flow = stores.flows.lookup(flowKey);
+      if (!flow) {
+        const now = new Date().toISOString();
+        const nextFlow = createActiveFlowRecord({
+          eventId: params.eventId,
+          planId: params.planId,
+          petId: params.petId,
+          correlationId: params.correlationId,
+          now,
+        });
+        stores.flows.registerIfAbsent(flowKey, nextFlow);
+        flow = stores.flows.lookup(flowKey) ?? nextFlow;
+      }
+
+      const processedAt = new Date().toISOString();
+      const recorded = stores.processedEvents.registerIfAbsent(processedKey, {
+        event_id: params.eventId,
+        flow_id: flow.flow_id,
+        event_type: params.eventType,
+        aggregate_id: params.aggregateId || params.checkinId,
+        processed_at: processedAt,
+      });
+      if (!recorded) {
+        return flow;
+      }
+
+      const now = new Date().toISOString();
+      const advanced = {
+        ...flow,
+        checkin_count: flow.checkin_count + 1,
+        last_checkin_at: now,
+        updated_at: now,
+      };
+      stores.flows.register(flowKey, advanced);
+      return advanced;
     },
     lookupFlowByPlanId(planId) {
       return stores.flows.lookup(toYouPetFlowPlanKey(planId));

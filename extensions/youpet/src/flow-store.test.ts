@@ -116,6 +116,161 @@ describe("YouPet flow store", () => {
     expect(flows.entries()).toHaveLength(1);
   });
 
+  it("advances an existing flow once per distinct check-in event", () => {
+    const { flowStore, flows, processedEvents } = createYouPetTestFlowStore(
+      createYouPetTempStateEnv(),
+    );
+    const created = flowStore.recordHealthPlanActivated({
+      eventId: "evt-health-plan-1",
+      eventType: "health_plan.activated",
+      aggregateId: "plan-1",
+      planId: "plan-1",
+      petId: "pet-1",
+      correlationId: "corr-1",
+    });
+
+    const advanced = flowStore.recordTaskCheckin({
+      eventId: "evt-checkin-1",
+      eventType: "task.checkin_received",
+      aggregateId: "checkin-1",
+      planId: "plan-1",
+      checkinId: "checkin-1",
+      petId: "pet-1",
+      correlationId: "corr-checkin",
+    });
+    const replay = flowStore.recordTaskCheckin({
+      eventId: "evt-checkin-1",
+      eventType: "task.checkin_received",
+      aggregateId: "checkin-1",
+      planId: "plan-1",
+      checkinId: "checkin-1",
+      petId: "pet-1",
+      correlationId: "corr-checkin",
+    });
+    const secondCheckin = flowStore.recordTaskCheckin({
+      eventId: "evt-checkin-2",
+      eventType: "task.checkin_received",
+      aggregateId: "checkin-2",
+      planId: "plan-1",
+      checkinId: "checkin-2",
+      petId: "pet-1",
+      correlationId: "corr-checkin-2",
+    });
+
+    expect(advanced).toMatchObject({
+      flow_id: created.flow_id,
+      plan_id: "plan-1",
+      checkin_count: 1,
+      status: "active",
+    });
+    expect(advanced.last_checkin_at).toEqual(expect.any(String));
+    expect(advanced.updated_at).toBe(advanced.last_checkin_at);
+    expect(replay).toEqual(advanced);
+    expect(secondCheckin).toMatchObject({
+      flow_id: created.flow_id,
+      plan_id: "plan-1",
+      checkin_count: 2,
+      status: "active",
+    });
+    expect(flows.entries()).toHaveLength(1);
+    expect(processedEvents.entries()).toHaveLength(3);
+    expect(flowStore.lookupProcessedEvent("evt-checkin-1")).toMatchObject({
+      event_id: "evt-checkin-1",
+      flow_id: created.flow_id,
+      event_type: "task.checkin_received",
+      aggregate_id: "checkin-1",
+    });
+    expect(flowStore.lookupProcessedEvent("evt-checkin-2")).toMatchObject({
+      event_id: "evt-checkin-2",
+      flow_id: created.flow_id,
+      event_type: "task.checkin_received",
+      aggregate_id: "checkin-2",
+    });
+  });
+
+  it("lazy-creates a flow from an out-of-order check-in event", () => {
+    const { flowStore, flows, processedEvents } = createYouPetTestFlowStore(
+      createYouPetTempStateEnv(),
+    );
+
+    const flow = flowStore.recordTaskCheckin({
+      eventId: "evt-checkin-1",
+      eventType: "task.checkin_received",
+      aggregateId: "checkin-1",
+      planId: "plan-1",
+      checkinId: "checkin-1",
+      petId: "pet-1",
+      correlationId: "corr-checkin",
+    });
+
+    expect(flow).toMatchObject({
+      plan_id: "plan-1",
+      pet_id: "pet-1",
+      status: "active",
+      core_linked: false,
+      core_linked_at: null,
+      correlation_id: "corr-checkin",
+      created_from_event_id: "evt-checkin-1",
+      checkin_count: 1,
+    });
+    expect(flow.last_checkin_at).toEqual(expect.any(String));
+    expect(flows.entries()).toHaveLength(1);
+    expect(processedEvents.entries()).toHaveLength(1);
+  });
+
+  it("preserves Core link state while advancing check-ins", () => {
+    const { flowStore } = createYouPetTestFlowStore(createYouPetTempStateEnv());
+    flowStore.recordHealthPlanActivated({
+      eventId: "evt-health-plan-1",
+      eventType: "health_plan.activated",
+      aggregateId: "plan-1",
+      planId: "plan-1",
+      petId: "pet-1",
+      correlationId: "corr-1",
+    });
+    const linked = flowStore.markFlowCoreLinked("plan-1");
+
+    const advanced = flowStore.recordTaskCheckin({
+      eventId: "evt-checkin-1",
+      eventType: "task.checkin_received",
+      aggregateId: "checkin-1",
+      planId: "plan-1",
+      checkinId: "checkin-1",
+      petId: "pet-1",
+      correlationId: "corr-checkin",
+    });
+
+    expect(advanced).toMatchObject({
+      flow_id: linked.flow_id,
+      core_linked: true,
+      core_linked_at: linked.core_linked_at,
+      checkin_count: 1,
+    });
+  });
+
+  it("rejects replay ledgers that reference a missing check-in flow", () => {
+    const { flowStore, processedEvents } = createYouPetTestFlowStore(createYouPetTempStateEnv());
+    processedEvents.register("processed.evt-checkin-1", {
+      event_id: "evt-checkin-1",
+      flow_id: "missing-flow",
+      event_type: "task.checkin_received",
+      aggregate_id: "checkin-1",
+      processed_at: "2026-06-01T00:00:00Z",
+    });
+
+    expect(() =>
+      flowStore.recordTaskCheckin({
+        eventId: "evt-checkin-1",
+        eventType: "task.checkin_received",
+        aggregateId: "checkin-1",
+        planId: "plan-1",
+        checkinId: "checkin-1",
+        petId: "pet-1",
+        correlationId: "corr-checkin",
+      }),
+    ).toThrow("YouPet flow ledger references a missing flow record");
+  });
+
   it("persists flow and ledger records across store close and reopen", async () => {
     const env = createYouPetTempStateEnv();
     const firstStore = createYouPetTestFlowStore(env).flowStore;

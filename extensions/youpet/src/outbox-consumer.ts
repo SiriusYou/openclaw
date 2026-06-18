@@ -253,6 +253,11 @@ export class YouPetOutboxConsumer {
       return;
     }
 
+    if (event.event_type === "task.checkin_received") {
+      await this.handleTaskCheckinReceived(event);
+      return;
+    }
+
     if (event.event_type === "task.missed") {
       await this.handleTaskMissed(event);
     }
@@ -409,6 +414,47 @@ export class YouPetOutboxConsumer {
       );
       this.settings.flowStore.markFlowCoreLinked(planId);
     }
+  }
+
+  private async handleTaskCheckinReceived(event: YouPetOutboxEventEnvelope): Promise<void> {
+    if (!this.settings.manageFlows) {
+      return;
+    }
+    const payload = readCoreBusinessPayload(event);
+    if (!payload) {
+      this.settings.logger?.warn?.(
+        `[youpet] Malformed task.checkin_received event ${event.event_id}: missing payload.payload`,
+      );
+      throw new Error("Malformed YouPet task.checkin_received payload");
+    }
+    const planId = readString(payload.plan_id)?.trim();
+    if (!planId) {
+      this.settings.logger?.warn?.(
+        `[youpet] Malformed task.checkin_received event ${event.event_id}: missing plan_id`,
+      );
+      throw new Error("Malformed YouPet task.checkin_received payload");
+    }
+    const checkinId = readString(payload.checkin_id)?.trim();
+    if (!checkinId) {
+      this.settings.logger?.warn?.(
+        `[youpet] Malformed task.checkin_received event ${event.event_id}: missing checkin_id`,
+      );
+      throw new Error("Malformed YouPet task.checkin_received payload");
+    }
+    if (!this.settings.flowStore) {
+      throw new Error("YouPet task.checkin_received handling requires a flow store");
+    }
+
+    const petId = readString(payload.pet_id)?.trim();
+    this.settings.flowStore.recordTaskCheckin({
+      eventId: event.event_id,
+      eventType: event.event_type,
+      aggregateId: event.aggregate_id || null,
+      planId,
+      checkinId,
+      ...(petId ? { petId } : {}),
+      correlationId: event.correlation_id ?? null,
+    });
   }
 
   private async requestJson<T>(
