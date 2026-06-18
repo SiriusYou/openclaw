@@ -8,7 +8,10 @@ import {
   createYouPetTestFlowStore,
   createYouPetTestRuntimeState,
 } from "./test/flow-store.fixture.js";
-import { createCoreOutboxEvent } from "./test/outbox-consumer.fixture.js";
+import {
+  createCoreOutboxEvent,
+  TASK_MISSED_CORE_OUTBOX_EVENT,
+} from "./test/outbox-consumer.fixture.js";
 
 type CapturedRequest = {
   url: string;
@@ -40,6 +43,9 @@ function createFetch(events: ReturnType<typeof createCoreOutboxEvent>[]) {
     }
     if (parsed.pathname.match(/^\/api\/v1\/health-plans\/[^/]+\/flow$/)) {
       return jsonResponse({ ok: true });
+    }
+    if (parsed.pathname === "/api/v1/tasks/task-1/escalate") {
+      return jsonResponse({ id: "alert-1", status: "open" }, 201);
     }
     if (parsed.pathname.endsWith("/ack")) {
       return jsonResponse({
@@ -215,5 +221,99 @@ describe("youpet plugin registration", () => {
       "/internal/events/outbox",
       "/internal/events/outbox/evt-task.checkin_received/ack",
     ]);
+  });
+
+  it("wires all built-in YouPet actions through the production outbox service path", async () => {
+    const env = createYouPetTempStateEnv();
+    const runtimeState = createYouPetTestRuntimeState(env);
+    const openSyncKeyedStore = vi.fn(runtimeState.openSyncKeyedStore);
+    const registerService = vi.fn();
+    const { fetchFn, requests } = createFetch([
+      createCoreOutboxEvent(
+        "health_plan.activated",
+        { plan_id: "plan-1", pet_id: "pet-1" },
+        {
+          aggregate_type: "health_plan",
+          aggregate_id: "plan-1",
+          correlation_id: "corr-flow",
+        },
+      ),
+      createCoreOutboxEvent(
+        "task.checkin_received",
+        {
+          task_id: "task-1",
+          checkin_id: "checkin-1",
+          plan_id: "plan-1",
+          pet_id: "pet-1",
+        },
+        {
+          aggregate_type: "checkin",
+          aggregate_id: "checkin-1",
+          correlation_id: "corr-checkin",
+        },
+      ),
+      TASK_MISSED_CORE_OUTBOX_EVENT,
+    ]);
+    vi.stubGlobal("fetch", fetchFn);
+
+    plugin.register(
+      createTestPluginApi({
+        id: "youpet",
+        name: "YouPet Core",
+        source: "test",
+        pluginConfig: {
+          enabled: true,
+          coreBaseUrl: "https://core.example.com",
+          serviceToken: "svc-token",
+          pollIntervalMs: 60_000,
+        },
+        runtime: { state: { openSyncKeyedStore } } as never,
+        registerService,
+      }),
+    );
+    const service = registerService.mock.calls.at(0)?.at(0);
+    if (!service) {
+      throw new Error("expected youpet plugin to register the outbox service");
+    }
+
+    service.start({
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      stateDir: "",
+      config: {},
+    });
+    await waitForRequestCount(requests, 6);
+    service.stop?.();
+
+    const flowStore = createYouPetTestFlowStore(env).flowStore;
+    const flow = flowStore.lookupFlowByPlanId("plan-1");
+    expect(openSyncKeyedStore).toHaveBeenCalledTimes(2);
+    expect(flow).toMatchObject({
+      plan_id: "plan-1",
+      pet_id: "pet-1",
+      status: "active",
+      core_linked: true,
+      checkin_count: 1,
+    });
+    expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+      "/internal/events/outbox",
+      "/api/v1/health-plans/plan-1/flow",
+      "/internal/events/outbox/evt-health_plan.activated/ack",
+      "/internal/events/outbox/evt-task.checkin_received/ack",
+      "/api/v1/tasks/task-1/escalate",
+      "/internal/events/outbox/evt-task.missed/ack",
+    ]);
+    expect(
+      requests.find(
+        (request) => new URL(request.url).pathname === "/api/v1/health-plans/plan-1/flow",
+      )?.body,
+    ).toEqual({ openclaw_flow_id: flow?.flow_id });
+    expect(
+      requests.find((request) => new URL(request.url).pathname === "/api/v1/tasks/task-1/escalate")
+        ?.body,
+    ).toEqual({
+      severity: "medium",
+      summary: "Task missed the configured YouPet check-in threshold.",
+    });
+    expect(requests.some((request) => new URL(request.url).pathname.endsWith("/nack"))).toBe(false);
   });
 });
