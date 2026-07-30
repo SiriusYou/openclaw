@@ -9,7 +9,7 @@ import { createCoreOutboxEvent } from "../test/outbox-consumer.fixture.js";
 import {
   createYouPetOutboxConsumerSettingsFromConfig,
   YouPetOutboxConsumer,
-  type YouPetOutboxEventEnvelope,
+  type YouPetOutboxDeliveryEnvelope,
   type YouPetOutboxFetch,
 } from "./outbox-consumer.js";
 
@@ -39,7 +39,7 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-function createFetch(events: YouPetOutboxEventEnvelope[], flowResponses: FlowResponse[] = []) {
+function createFetch(events: YouPetOutboxDeliveryEnvelope[], flowResponses: FlowResponse[] = []) {
   const requests: CapturedRequest[] = [];
   const fetchFn: YouPetOutboxFetch = async (input, init) => {
     const url = typeof input === "string" || input instanceof URL ? String(input) : input.url;
@@ -98,8 +98,9 @@ function flowRequests(requests: CapturedRequest[]): CapturedRequest[] {
 
 function createCheckinEvent(
   businessPayload: Record<string, unknown> = {},
-  overrides: Partial<YouPetOutboxEventEnvelope> = {},
-): YouPetOutboxEventEnvelope {
+  overrides: Partial<YouPetOutboxDeliveryEnvelope> = {},
+  innerEventId?: string,
+): YouPetOutboxDeliveryEnvelope {
   const checkinId =
     typeof businessPayload.checkin_id === "string" ? businessPayload.checkin_id : "checkin-1";
   return createCoreOutboxEvent(
@@ -116,6 +117,44 @@ function createCheckinEvent(
       aggregate_id: checkinId,
       ...overrides,
     },
+    innerEventId ? { innerEventId } : undefined,
+  );
+}
+
+function createReplayCheckinEvent(params: {
+  deliveryId: string;
+  innerEventId: string;
+  checkinId: string;
+}): YouPetOutboxDeliveryEnvelope {
+  return createCheckinEvent(
+    { checkin_id: params.checkinId },
+    {
+      event_id: params.deliveryId,
+      aggregate_id: params.checkinId,
+    },
+    params.innerEventId,
+  );
+}
+
+function createReplayHealthPlanActivatedEvent(params: {
+  deliveryId: string;
+  innerEventId: string;
+  planId?: string;
+  petId?: string;
+}): YouPetOutboxDeliveryEnvelope {
+  return createCoreOutboxEvent(
+    "health_plan.activated",
+    {
+      plan_id: params.planId ?? "plan-1",
+      pet_id: params.petId ?? "pet-1",
+    },
+    {
+      event_id: params.deliveryId,
+      aggregate_type: "health_plan",
+      aggregate_id: params.planId ?? "plan-1",
+      correlation_id: "corr-flow",
+    },
+    { innerEventId: params.innerEventId },
   );
 }
 
@@ -169,14 +208,14 @@ describe("YouPetOutboxConsumer health plan flows", () => {
       status: "active",
       core_linked: true,
       correlation_id: "corr-flow",
-      created_from_event_id: "evt-health_plan.activated",
+      created_from_event_id: "payload-evt-health_plan.activated",
       checkin_count: 0,
       last_checkin_at: null,
     });
     expect(flow?.flow_id).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu,
     );
-    expect(flowStore.lookupProcessedEvent("evt-health_plan.activated")).toMatchObject({
+    expect(flowStore.lookupProcessedEvent("payload-evt-health_plan.activated")).toMatchObject({
       flow_id: flow?.flow_id,
       event_type: "health_plan.activated",
       aggregate_id: "plan-1",
@@ -188,7 +227,7 @@ describe("YouPetOutboxConsumer health plan flows", () => {
       body: { openclaw_flow_id: flow?.flow_id },
     });
     expect(flowWriteback[0]?.headers["idempotency-key"]).toBe(
-      "openclaw:youpet:evt-health_plan.activated:flow-link",
+      "openclaw:youpet:payload-evt-health_plan.activated:flow-link",
     );
     expect(flowWriteback[0]?.headers["x-correlation-id"]).toBe("corr-flow");
     expect(pathnames(requests)).toEqual([
@@ -230,6 +269,83 @@ describe("YouPetOutboxConsumer health plan flows", () => {
     });
     expect(flowStore.lookupFlowByPlanId("plan-1")?.core_linked).toBe(true);
     expect(flowRequests(requests)).toHaveLength(1);
+  });
+
+  it("dedupes replayed health_plan.activated deliveries by payload event_id while acking each delivery row", async () => {
+    const { flowStore, processedEvents } = createYouPetTestFlowStore(createYouPetTempStateEnv());
+    const events = [
+      createReplayHealthPlanActivatedEvent({
+        deliveryId: "evt-health_plan.activated-redelivery-1",
+        innerEventId: "health-plan-activation-business-1",
+      }),
+    ];
+    const { fetchFn, requests } = createFetch(events);
+    const consumer = new YouPetOutboxConsumer({
+      coreBaseUrl: "https://core.example.com",
+      serviceToken: "svc-token",
+      fetchFn,
+      flowStore,
+    });
+
+    const first = await consumer.pollOnce();
+    events.splice(
+      0,
+      events.length,
+      createReplayHealthPlanActivatedEvent({
+        deliveryId: "evt-health_plan.activated-redelivery-2",
+        innerEventId: "health-plan-activation-business-1",
+      }),
+    );
+    const second = await consumer.pollOnce();
+
+    expect(first).toEqual({
+      pulled: 1,
+      processed: 1,
+      acknowledged: 1,
+      nacked: 0,
+      skipped: 0,
+    });
+    expect(second).toEqual(first);
+    const flow = flowStore.lookupFlowByPlanId("plan-1");
+    expect(flow).toMatchObject({
+      plan_id: "plan-1",
+      pet_id: "pet-1",
+      core_linked: true,
+      correlation_id: "corr-flow",
+      created_from_event_id: "health-plan-activation-business-1",
+      checkin_count: 0,
+      last_checkin_at: null,
+    });
+    expect(flowRequests(requests)).toHaveLength(1);
+    expect(flowStore.lookupProcessedEvent("health-plan-activation-business-1")).toMatchObject({
+      flow_id: flow?.flow_id,
+      event_id: "health-plan-activation-business-1",
+      event_type: "health_plan.activated",
+      aggregate_id: "plan-1",
+    });
+    expect(
+      flowStore.lookupProcessedEvent("evt-health_plan.activated-redelivery-1"),
+    ).toBeUndefined();
+    expect(
+      flowStore.lookupProcessedEvent("evt-health_plan.activated-redelivery-2"),
+    ).toBeUndefined();
+    expect(
+      processedEvents
+        .entries()
+        .filter((entry) => entry.key === "processed.health-plan-activation-business-1"),
+    ).toHaveLength(1);
+    expect(
+      processedEvents
+        .entries()
+        .filter((entry) => entry.key.includes("evt-health_plan.activated-redelivery-")),
+    ).toEqual([]);
+    expect(pathnames(requests)).toEqual([
+      "/internal/events/outbox",
+      "/api/v1/health-plans/plan-1/flow",
+      "/internal/events/outbox/evt-health_plan.activated-redelivery-1/ack",
+      "/internal/events/outbox",
+      "/internal/events/outbox/evt-health_plan.activated-redelivery-2/ack",
+    ]);
   });
 
   it("advances task check-ins through the production settings path", async () => {
@@ -275,7 +391,7 @@ describe("YouPetOutboxConsumer health plan flows", () => {
       checkin_count: 1,
     });
     expect(flow?.last_checkin_at).toEqual(expect.any(String));
-    expect(flowStore.lookupProcessedEvent("evt-task.checkin_received")).toMatchObject({
+    expect(flowStore.lookupProcessedEvent("payload-evt-task.checkin_received")).toMatchObject({
       flow_id: flow?.flow_id,
       event_type: "task.checkin_received",
       aggregate_id: "checkin-1",
@@ -320,13 +436,80 @@ describe("YouPetOutboxConsumer health plan flows", () => {
     expect(
       processedEvents
         .entries()
-        .filter((entry) => entry.value.event_id === "evt-task.checkin_received"),
+        .filter((entry) => entry.value.event_id === "payload-evt-task.checkin_received"),
     ).toHaveLength(1);
     expect(pathnames(requests)).toEqual([
       "/internal/events/outbox",
       "/internal/events/outbox/evt-task.checkin_received/ack",
       "/internal/events/outbox",
       "/internal/events/outbox/evt-task.checkin_received/ack",
+    ]);
+  });
+
+  it("dedupes semantic replay by payload event_id but advances distinct check-ins", async () => {
+    const { flowStore, processedEvents } = createYouPetTestFlowStore(createYouPetTempStateEnv());
+    flowStore.recordHealthPlanActivated({
+      eventId: "evt-health-plan-1",
+      eventType: "health_plan.activated",
+      aggregateId: "plan-1",
+      planId: "plan-1",
+      petId: "pet-1",
+      correlationId: "corr-flow",
+    });
+    const firstDelivery = createReplayCheckinEvent({
+      deliveryId: "evt-task.checkin_received-redelivery-1",
+      innerEventId: "checkin-business-1",
+      checkinId: "checkin-1",
+    });
+    const replayDelivery = createReplayCheckinEvent({
+      deliveryId: "evt-task.checkin_received-redelivery-2",
+      innerEventId: "checkin-business-1",
+      checkinId: "checkin-1",
+    });
+    const secondBusinessDelivery = createReplayCheckinEvent({
+      deliveryId: "evt-task.checkin_received-redelivery-3",
+      innerEventId: "checkin-business-2",
+      checkinId: "checkin-2",
+    });
+
+    const events: YouPetOutboxDeliveryEnvelope[] = [firstDelivery];
+    const { fetchFn, requests } = createFetch(events);
+    const consumer = new YouPetOutboxConsumer({
+      coreBaseUrl: "https://core.example.com",
+      serviceToken: "svc-token",
+      fetchFn,
+      flowStore,
+    });
+
+    const first = await consumer.pollOnce();
+    events.splice(0, events.length, replayDelivery);
+    const second = await consumer.pollOnce();
+    events.splice(0, events.length, secondBusinessDelivery);
+    const third = await consumer.pollOnce();
+
+    expect(first).toEqual({
+      pulled: 1,
+      processed: 1,
+      acknowledged: 1,
+      nacked: 0,
+      skipped: 0,
+    });
+    expect(second).toEqual(first);
+    expect(third).toEqual(first);
+    expect(flowStore.lookupFlowByPlanId("plan-1")?.checkin_count).toBe(2);
+    expect(
+      processedEvents.entries().filter((entry) => entry.value.event_id === "checkin-business-1"),
+    ).toHaveLength(1);
+    expect(
+      processedEvents.entries().filter((entry) => entry.value.event_id === "checkin-business-2"),
+    ).toHaveLength(1);
+    expect(pathnames(requests)).toEqual([
+      "/internal/events/outbox",
+      "/internal/events/outbox/evt-task.checkin_received-redelivery-1/ack",
+      "/internal/events/outbox",
+      "/internal/events/outbox/evt-task.checkin_received-redelivery-2/ack",
+      "/internal/events/outbox",
+      "/internal/events/outbox/evt-task.checkin_received-redelivery-3/ack",
     ]);
   });
 
@@ -362,7 +545,7 @@ describe("YouPetOutboxConsumer health plan flows", () => {
       pet_id: "pet-1",
       core_linked: false,
       correlation_id: "corr-checkin",
-      created_from_event_id: "evt-task.checkin_received",
+      created_from_event_id: "payload-evt-task.checkin_received",
       checkin_count: 1,
     });
     expect(flowRequests(checkinFetch.requests)).toHaveLength(0);
@@ -458,7 +641,7 @@ describe("YouPetOutboxConsumer health plan flows", () => {
         },
       ),
       warning:
-        "[youpet] Malformed task.checkin_received event evt-checkin-missing-plan: missing plan_id",
+        "[youpet] Malformed task.checkin_received event payload-evt-checkin-missing-plan: missing plan_id",
       nackPath: "/internal/events/outbox/evt-checkin-missing-plan/nack",
     },
     {
@@ -471,7 +654,7 @@ describe("YouPetOutboxConsumer health plan flows", () => {
         },
       ),
       warning:
-        "[youpet] Malformed task.checkin_received event evt-checkin-missing-checkin: missing checkin_id",
+        "[youpet] Malformed task.checkin_received event payload-evt-checkin-missing-checkin: missing checkin_id",
       nackPath: "/internal/events/outbox/evt-checkin-missing-checkin/nack",
     },
     {
@@ -480,11 +663,14 @@ describe("YouPetOutboxConsumer health plan flows", () => {
         {},
         {
           event_id: "evt-checkin-missing-payload",
-          payload: { event_type: "task.checkin_received" },
+          payload: {
+            event_id: "payload-evt-checkin-missing-payload",
+            event_type: "task.checkin_received",
+          },
         },
       ),
       warning:
-        "[youpet] Malformed task.checkin_received event evt-checkin-missing-payload: missing payload.payload",
+        "[youpet] Malformed task.checkin_received event payload-evt-checkin-missing-payload: missing payload.payload",
       nackPath: "/internal/events/outbox/evt-checkin-missing-payload/nack",
     },
   ]) {
@@ -703,7 +889,7 @@ describe("YouPetOutboxConsumer health plan flows", () => {
       error: "Malformed YouPet health_plan.activated payload",
     });
     expect(logger.warn).toHaveBeenCalledWith(
-      "[youpet] Malformed health_plan.activated event evt-health-plan-missing-plan: missing plan_id",
+      "[youpet] Malformed health_plan.activated event payload-evt-health-plan-missing-plan: missing plan_id",
     );
   });
 
@@ -769,7 +955,10 @@ describe("YouPetOutboxConsumer health plan flows", () => {
           aggregate_id: "plan-1",
           // Core nests business fields under payload.payload; an envelope whose
           // payload object lacks the nested payload must nack, not silently drop.
-          payload: { event_type: "health_plan.activated" },
+          payload: {
+            event_id: "payload-evt-health-plan-missing-payload",
+            event_type: "health_plan.activated",
+          },
         },
       ),
     ]);
@@ -800,7 +989,7 @@ describe("YouPetOutboxConsumer health plan flows", () => {
       error: "Malformed YouPet health_plan.activated payload",
     });
     expect(logger.warn).toHaveBeenCalledWith(
-      "[youpet] Malformed health_plan.activated event evt-health-plan-missing-payload: missing payload.payload",
+      "[youpet] Malformed health_plan.activated event payload-evt-health-plan-missing-payload: missing payload.payload",
     );
   });
 });

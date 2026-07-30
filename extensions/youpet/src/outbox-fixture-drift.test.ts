@@ -3,12 +3,13 @@ import { describe, expect, it } from "vitest";
 import { createCoreOutboxEvent } from "../test/outbox-consumer.fixture.js";
 import {
   YouPetOutboxConsumer,
+  type YouPetOutboxDeliveryEnvelope,
   type YouPetOutboxEventEnvelope,
   type YouPetOutboxFetch,
 } from "./outbox-consumer.js";
 
 type VendoredFixture = {
-  items: [YouPetOutboxEventEnvelope];
+  items: [YouPetOutboxDeliveryEnvelope];
   provenance: {
     canonical_source: string;
     canonical_sha256: string;
@@ -88,6 +89,13 @@ describe("YouPet Core outbox fixture drift", () => {
       nacked: 0,
       skipped: 0,
     });
-    expect(normalized).toEqual(expected);
+    expect(normalized).toEqual({
+      ...expected,
+      delivery_id: expected.event_id,
+      event_id:
+        typeof expected.payload.event_id === "string"
+          ? expected.payload.event_id
+          : expected.event_id,
+    });
   });
 });

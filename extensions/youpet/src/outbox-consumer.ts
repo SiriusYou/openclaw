@@ -18,7 +18,26 @@ export type YouPetOutboxFetch = (
   init?: RequestInit,
 ) => Promise<Response>;
 
+export interface YouPetOutboxDeliveryEnvelope {
+  event_id: string;
+  consumer: "openclaw";
+  state: YouPetOutboxDeliveryState;
+  attempts: number;
+  next_attempt_at: string;
+  last_attempt_at?: string | null;
+  delivered_at?: string | null;
+  dead_lettered_at?: string | null;
+  last_error?: string | null;
+  event_type: string;
+  aggregate_type: string;
+  aggregate_id: string;
+  correlation_id?: string | null;
+  payload: Record<string, unknown>;
+  created_at: string;
+}
+
 export interface YouPetOutboxEventEnvelope {
+  delivery_id: string;
   event_id: string;
   consumer: "openclaw";
   state: YouPetOutboxDeliveryState;
@@ -193,8 +212,8 @@ export class YouPetOutboxConsumer {
 
     for (const rawItem of items) {
       result.processed += 1;
-      const rawEventId = readRawEventId(rawItem);
-      if (!rawEventId) {
+      const rawDeliveryId = readRawDeliveryId(rawItem);
+      if (!rawDeliveryId) {
         this.settings.logger?.error?.("[youpet] Skipping outbox item with missing event_id");
         result.skipped += 1;
         continue;
@@ -206,9 +225,9 @@ export class YouPetOutboxConsumer {
       } catch (error) {
         const formattedError = formatError(error);
         this.settings.logger?.warn?.(
-          `[youpet] Nacking malformed outbox item ${rawEventId}: ${formattedError}`,
+          `[youpet] Nacking malformed outbox item ${rawDeliveryId}: ${formattedError}`,
         );
-        await this.nack(rawEventId, formattedError);
+        await this.nack(rawDeliveryId, formattedError);
         result.nacked += 1;
         continue;
       }
@@ -221,11 +240,11 @@ export class YouPetOutboxConsumer {
           `[youpet] Nacking malformed or failed ${item.event_type} event ${item.event_id}: ` +
             formattedError,
         );
-        await this.nack(item.event_id, formattedError);
+        await this.nack(item.delivery_id, formattedError);
         result.nacked += 1;
         continue;
       }
-      await this.ack(item.event_id);
+      await this.ack(item.delivery_id);
       result.acknowledged += 1;
     }
 
@@ -263,9 +282,9 @@ export class YouPetOutboxConsumer {
     }
   }
 
-  async ack(eventId: string): Promise<YouPetOutboxDelivery> {
+  async ack(deliveryId: string): Promise<YouPetOutboxDelivery> {
     return await this.requestJson<YouPetOutboxDelivery>(
-      `/internal/events/outbox/${encodeURIComponent(eventId)}/ack`,
+      `/internal/events/outbox/${encodeURIComponent(deliveryId)}/ack`,
       {
         method: "POST",
         query: {
@@ -275,9 +294,9 @@ export class YouPetOutboxConsumer {
     );
   }
 
-  async nack(eventId: string, error: string): Promise<YouPetOutboxDelivery> {
+  async nack(deliveryId: string, error: string): Promise<YouPetOutboxDelivery> {
     return await this.requestJson<YouPetOutboxDelivery>(
-      `/internal/events/outbox/${encodeURIComponent(eventId)}/nack`,
+      `/internal/events/outbox/${encodeURIComponent(deliveryId)}/nack`,
       {
         method: "POST",
         query: {
@@ -567,8 +586,10 @@ function normalizeOutboxEvent(item: unknown): YouPetOutboxEventEnvelope {
     throw new Error("YouPet outbox item must be an object");
   }
   const row = item as Record<string, unknown>;
+  const payload = readRecord(row.payload);
   return {
-    event_id: requireString(row.event_id, "event_id"),
+    delivery_id: requireString(row.event_id, "event_id"),
+    event_id: requireEnvelopeEventId(payload),
     consumer: "openclaw",
     state: requireDeliveryState(row.state),
     attempts: readPositiveInteger(row.attempts) ?? 0,
@@ -581,12 +602,12 @@ function normalizeOutboxEvent(item: unknown): YouPetOutboxEventEnvelope {
     aggregate_type: requireString(row.aggregate_type, "aggregate_type"),
     aggregate_id: requireString(row.aggregate_id, "aggregate_id"),
     correlation_id: readNullableString(row.correlation_id),
-    payload: readRecord(row.payload),
+    payload,
     created_at: requireString(row.created_at, "created_at"),
   };
 }
 
-function readRawEventId(item: unknown): string | undefined {
+function readRawDeliveryId(item: unknown): string | undefined {
   if (!item || typeof item !== "object") {
     return undefined;
   }
@@ -635,6 +656,14 @@ function readCoreBusinessPayload(
   // Core stores an event envelope in the outbox row; business fields live under
   // payload.payload. Reading the row-level payload silently skips escalation.
   return readOptionalRecord(event.payload.payload);
+}
+
+function requireEnvelopeEventId(payload: Record<string, unknown>): string {
+  const eventId = readString(payload.event_id);
+  if (!eventId) {
+    throw new Error("YouPet outbox item missing payload.event_id");
+  }
+  return eventId;
 }
 
 function readInvalidTaskStateConflict(

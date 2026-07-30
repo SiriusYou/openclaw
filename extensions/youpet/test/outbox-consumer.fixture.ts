@@ -1,16 +1,22 @@
-import type { YouPetOutboxEventEnvelope } from "../src/outbox-consumer.js";
+import type { YouPetOutboxDeliveryEnvelope } from "../src/outbox-consumer.js";
+
+type CreateCoreOutboxEventOptions = {
+  innerEventId?: string;
+};
 
 export function createCoreOutboxEvent(
   eventType: string,
   businessPayload: Record<string, unknown> = {},
-  overrides: Partial<YouPetOutboxEventEnvelope> = {},
-): YouPetOutboxEventEnvelope {
-  const eventId = overrides.event_id ?? `evt-${eventType}`;
+  overrides: Partial<YouPetOutboxDeliveryEnvelope> = {},
+  options: CreateCoreOutboxEventOptions = {},
+): YouPetOutboxDeliveryEnvelope {
+  const deliveryId = overrides.event_id ?? `evt-${eventType}`;
+  const innerEventId = options.innerEventId ?? `payload-${deliveryId}`;
   const correlationId = overrides.correlation_id ?? "corr-1";
   const aggregateId =
     typeof businessPayload.task_id === "string" ? businessPayload.task_id : "task-1";
   return {
-    event_id: eventId,
+    event_id: deliveryId,
     consumer: "openclaw",
     state: "pending",
     attempts: 0,
@@ -29,7 +35,7 @@ export function createCoreOutboxEvent(
         type: "task_instance",
       },
       correlation_id: correlationId,
-      event_id: `payload-${eventId}`,
+      event_id: innerEventId,
       event_type: eventType,
       event_version: 1,
       idempotency_key: `idem-${eventType}`,

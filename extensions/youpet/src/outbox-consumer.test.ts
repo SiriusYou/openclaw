@@ -7,7 +7,7 @@ import {
   createYouPetOutboxConsumerSettingsFromConfig,
   YouPetCoreRequestError,
   YouPetOutboxConsumer,
-  type YouPetOutboxEventEnvelope,
+  type YouPetOutboxDeliveryEnvelope,
   type YouPetOutboxFetch,
 } from "./outbox-consumer.js";
 
@@ -28,7 +28,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 function createFetch(routes: {
-  events?: YouPetOutboxEventEnvelope[];
+  events?: YouPetOutboxDeliveryEnvelope[];
   failPath?: string;
   failStatus?: number;
   failBody?: unknown;
@@ -80,6 +80,31 @@ function createFetch(routes: {
     return jsonResponse({ detail: { code: "not_found", message: parsed.pathname } }, 404);
   };
   return { fetchFn, requests };
+}
+
+const TASK_MISSED_REPLAY_PAYLOAD = {
+  task_id: "task-1",
+  plan_id: "plan-1",
+  owner_user_id: "owner-1",
+  missed_count: 2,
+  missed_threshold: 2,
+  due_at: "2026-06-01T00:00:00Z",
+} satisfies Record<string, unknown>;
+
+function createTaskMissedReplayEvent(
+  deliveryId: string,
+  innerEventId: string,
+): YouPetOutboxDeliveryEnvelope {
+  return createCoreOutboxEvent(
+    "task.missed",
+    TASK_MISSED_REPLAY_PAYLOAD,
+    {
+      event_id: deliveryId,
+    },
+    {
+      innerEventId,
+    },
+  );
 }
 
 describe("YouPetOutboxConsumer", () => {
@@ -149,7 +174,9 @@ describe("YouPetOutboxConsumer", () => {
         summary: "Task missed the configured YouPet check-in threshold.",
       },
     });
-    expect(escalation?.headers["idempotency-key"]).toBe("openclaw:youpet:evt-task.missed:escalate");
+    expect(escalation?.headers["idempotency-key"]).toBe(
+      "openclaw:youpet:payload-evt-task.missed:escalate",
+    );
     expect(requests.at(-1)?.url).toContain("/internal/events/outbox/evt-task.missed/ack");
   });
 
@@ -163,6 +190,7 @@ describe("YouPetOutboxConsumer", () => {
           {
             event_id: "evt-task.missed-missing-business",
             payload: {
+              event_id: "payload-evt-task.missed-missing-business",
               event_type: "task.missed",
               event_version: 1,
               payload: null,
@@ -196,7 +224,7 @@ describe("YouPetOutboxConsumer", () => {
     );
     expect(requests.at(-1)?.body).toEqual({ error: "Malformed YouPet task.missed payload" });
     expect(logger.warn).toHaveBeenCalledWith(
-      "[youpet] Malformed task.missed event evt-task.missed-missing-business: missing payload.payload",
+      "[youpet] Malformed task.missed event payload-evt-task.missed-missing-business: missing payload.payload",
     );
   });
 
@@ -248,8 +276,66 @@ describe("YouPetOutboxConsumer", () => {
       .map((request) => request.headers["idempotency-key"]);
 
     expect(escalationKeys).toEqual([
-      "openclaw:youpet:evt-task.missed:escalate",
-      "openclaw:youpet:evt-task.missed:escalate",
+      "openclaw:youpet:payload-evt-task.missed:escalate",
+      "openclaw:youpet:payload-evt-task.missed:escalate",
+    ]);
+  });
+
+  it("uses payload event identity for idempotency keys when delivery rows are regenerated", async () => {
+    const events = [
+      createTaskMissedReplayEvent("evt-task.missed-redeliver-1", "task-missed-business"),
+    ];
+    const { fetchFn, requests } = createFetch({ events });
+    const consumer = new YouPetOutboxConsumer({
+      coreBaseUrl: "https://core.example.com",
+      serviceToken: "svc-token",
+      fetchFn,
+    });
+
+    await consumer.pollOnce();
+    events.splice(
+      0,
+      events.length,
+      createTaskMissedReplayEvent("evt-task.missed-redeliver-2", "task-missed-business"),
+    );
+    await consumer.pollOnce();
+
+    const escalationKeys = requests
+      .filter((request) => new URL(request.url).pathname === "/api/v1/tasks/task-1/escalate")
+      .map((request) => request.headers["idempotency-key"]);
+
+    expect(escalationKeys).toEqual([
+      "openclaw:youpet:task-missed-business:escalate",
+      "openclaw:youpet:task-missed-business:escalate",
+    ]);
+  });
+
+  it("uses distinct payload event identities for legitimate repeated task.missed escalations", async () => {
+    const events = [
+      createTaskMissedReplayEvent("evt-task.missed-distinct-1", "task-missed-business-1"),
+    ];
+    const { fetchFn, requests } = createFetch({ events });
+    const consumer = new YouPetOutboxConsumer({
+      coreBaseUrl: "https://core.example.com",
+      serviceToken: "svc-token",
+      fetchFn,
+    });
+
+    await consumer.pollOnce();
+    events.splice(
+      0,
+      events.length,
+      createTaskMissedReplayEvent("evt-task.missed-distinct-2", "task-missed-business-2"),
+    );
+    await consumer.pollOnce();
+
+    const escalationKeys = requests
+      .filter((request) => new URL(request.url).pathname === "/api/v1/tasks/task-1/escalate")
+      .map((request) => request.headers["idempotency-key"]);
+
+    expect(escalationKeys).toEqual([
+      "openclaw:youpet:task-missed-business-1:escalate",
+      "openclaw:youpet:task-missed-business-2:escalate",
     ]);
   });
 
@@ -345,7 +431,7 @@ describe("YouPetOutboxConsumer", () => {
       expect.stringContaining("terminal task.missed escalation conflict"),
     );
     expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining('"event_id":"evt-task.missed"'),
+      expect.stringContaining('"event_id":"payload-evt-task.missed"'),
     );
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('"task_id":"task-1"'));
     expect(logger.warn).toHaveBeenCalledWith(
@@ -492,6 +578,70 @@ describe("YouPetOutboxConsumer", () => {
     expect(logger.error).toHaveBeenNthCalledWith(
       1,
       "[youpet] Skipping outbox item with missing event_id",
+    );
+  });
+
+  it("nacks supported deliveries missing payload.event_id before side effects", async () => {
+    const logger = { warn: vi.fn() };
+    const malformed = createCoreOutboxEvent(
+      "task.missed",
+      {
+        task_id: "task-1",
+        missed_count: 2,
+        missed_threshold: 2,
+      },
+      {
+        event_id: "evt-task.missed-missing-inner-id",
+        payload: {
+          aggregate: {
+            id: "task-1",
+            type: "task_instance",
+          },
+          correlation_id: "corr-1",
+          event_type: "task.missed",
+          event_version: 1,
+          idempotency_key: "idem-task.missed",
+          occurred_at: "2026-06-01T00:00:00Z",
+          payload: {
+            task_id: "task-1",
+            missed_count: 2,
+            missed_threshold: 2,
+          },
+          producer: "youpet-core",
+        },
+      },
+    );
+    const { fetchFn, requests } = createFetch({
+      events: [malformed],
+    });
+    const consumer = new YouPetOutboxConsumer({
+      coreBaseUrl: "https://core.example.com",
+      serviceToken: "svc-token",
+      fetchFn,
+      logger,
+    });
+
+    const result = await consumer.pollOnce();
+
+    expect(result).toEqual({
+      pulled: 1,
+      processed: 1,
+      acknowledged: 0,
+      nacked: 1,
+      skipped: 0,
+    });
+    expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+      "/internal/events/outbox",
+      "/internal/events/outbox/evt-task.missed-missing-inner-id/nack",
+    ]);
+    expect(requests.some((request) => new URL(request.url).pathname.endsWith("/escalate"))).toBe(
+      false,
+    );
+    expect(requests.at(-1)?.body).toEqual({
+      error: "YouPet outbox item missing payload.event_id",
+    });
+    expect(logger.warn).toHaveBeenCalledWith(
+      "[youpet] Nacking malformed outbox item evt-task.missed-missing-inner-id: YouPet outbox item missing payload.event_id",
     );
   });
 
