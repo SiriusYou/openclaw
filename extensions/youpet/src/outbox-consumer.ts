@@ -249,6 +249,10 @@ export class YouPetOutboxConsumer {
       }
       if (outcome === "unhandled") {
         if (!this.settings.ackUnhandledEvents) {
+          this.settings.logger?.info?.(
+            `[youpet] Nacking unsupported ${item.event_type} delivery ${item.delivery_id} ` +
+              `(domain event ${item.event_id})`,
+          );
           await this.nack(item.delivery_id, `unsupported_event_type: ${item.event_type}`);
           result.nacked += 1;
           continue;

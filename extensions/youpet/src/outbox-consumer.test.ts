@@ -540,7 +540,7 @@ describe("YouPetOutboxConsumer", () => {
     );
   });
 
-  it("nacks unknown event types when ackUnhandledEvents is false", async () => {
+  it("nacks unknown event types on every poll when ackUnhandledEvents is false", async () => {
     const logger = { info: vi.fn() };
     const { fetchFn, requests } = createFetch({
       events: [createCoreOutboxEvent("future.event_type", { task_id: "task-1" })],
@@ -553,9 +553,17 @@ describe("YouPetOutboxConsumer", () => {
       ackUnhandledEvents: false,
     });
 
-    const result = await consumer.pollOnce();
+    const first = await consumer.pollOnce();
+    const second = await consumer.pollOnce();
 
-    expect(result).toEqual({
+    expect(first).toEqual({
+      pulled: 1,
+      processed: 1,
+      acknowledged: 0,
+      nacked: 1,
+      skipped: 0,
+    });
+    expect(second).toEqual({
       pulled: 1,
       processed: 1,
       acknowledged: 0,
@@ -565,11 +573,50 @@ describe("YouPetOutboxConsumer", () => {
     expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
       "/internal/events/outbox",
       "/internal/events/outbox/evt-future.event_type/nack",
+      "/internal/events/outbox",
+      "/internal/events/outbox/evt-future.event_type/nack",
     ]);
     expect(requests[1]?.body).toEqual({
       error: "unsupported_event_type: future.event_type",
     });
-    expect(logger.info).not.toHaveBeenCalled();
+    expect(requests[3]?.body).toEqual(requests[1]?.body);
+    expect(logger.info).toHaveBeenCalledTimes(2);
+    expect(logger.info).toHaveBeenNthCalledWith(
+      1,
+      "[youpet] Nacking unsupported future.event_type delivery evt-future.event_type (domain event payload-evt-future.event_type)",
+    );
+    expect(logger.info).toHaveBeenNthCalledWith(
+      2,
+      "[youpet] Nacking unsupported future.event_type delivery evt-future.event_type (domain event payload-evt-future.event_type)",
+    );
+    expect(requests.some((request) => new URL(request.url).pathname.endsWith("/ack"))).toBe(false);
+  });
+
+  it("acknowledges handled events when ackUnhandledEvents is false", async () => {
+    const { fetchFn, requests } = createFetch({
+      events: [TASK_MISSED_CORE_OUTBOX_EVENT],
+    });
+    const consumer = new YouPetOutboxConsumer({
+      coreBaseUrl: "https://core.example.com",
+      serviceToken: "svc-token",
+      fetchFn,
+      ackUnhandledEvents: false,
+    });
+
+    const result = await consumer.pollOnce();
+
+    expect(result).toEqual({
+      pulled: 1,
+      processed: 1,
+      acknowledged: 1,
+      nacked: 0,
+      skipped: 0,
+    });
+    expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+      "/internal/events/outbox",
+      "/api/v1/tasks/task-1/escalate",
+      "/internal/events/outbox/evt-task.missed/ack",
+    ]);
   });
 
   it("skips empty event_id deliveries before dispatch, ack, or nack", async () => {
