@@ -132,6 +132,8 @@ type ResolvedRuntimeSettings = Omit<ResolvedYouPetOutboxConsumerSettings, "fetch
   fetchFn: YouPetOutboxFetch;
 };
 
+type YouPetOutboxProcessEventResult = "handled" | "unhandled";
+
 export class YouPetCoreRequestError extends Error {
   readonly status: number;
   readonly path: string;
@@ -232,17 +234,28 @@ export class YouPetOutboxConsumer {
         continue;
       }
 
+      let outcome: YouPetOutboxProcessEventResult;
       try {
-        await this.processEvent(item);
+        outcome = await this.processEvent(item);
       } catch (error) {
         const formattedError = formatError(error);
         this.settings.logger?.warn?.(
-          `[youpet] Nacking malformed or failed ${item.event_type} event ${item.event_id}: ` +
-            formattedError,
+          `[youpet] Nacking malformed or failed ${item.event_type} delivery ${item.delivery_id} ` +
+            `(domain event ${item.event_id}): ${formattedError}`,
         );
         await this.nack(item.delivery_id, formattedError);
         result.nacked += 1;
         continue;
+      }
+      if (outcome === "unhandled") {
+        if (!this.settings.ackUnhandledEvents) {
+          await this.nack(item.delivery_id, `unsupported_event_type: ${item.event_type}`);
+          result.nacked += 1;
+          continue;
+        }
+        this.settings.logger?.info?.(
+          `[youpet] Acknowledging unhandled outbox event type: ${item.event_type}`,
+        );
       }
       await this.ack(item.delivery_id);
       result.acknowledged += 1;
@@ -251,35 +264,35 @@ export class YouPetOutboxConsumer {
     return result;
   }
 
-  async processEvent(event: YouPetOutboxEventEnvelope): Promise<void> {
+  async processEvent(event: YouPetOutboxEventEnvelope): Promise<YouPetOutboxProcessEventResult> {
     if (!isYouPetOpenClawEventType(event.event_type)) {
-      this.settings.logger?.info?.(
-        `[youpet] Acknowledging unhandled outbox event type: ${event.event_type}`,
-      );
-      return;
+      return "unhandled";
     }
 
     const handler = this.settings.handlers?.[event.event_type];
     if (handler) {
       await handler(event, { consumer: this });
-      return;
+      return "handled";
     }
 
     // Production flow behavior is built in here; settings.handlers remains only
     // an override seam, so config-only installs cannot ack-drop supported flows.
     if (event.event_type === "health_plan.activated") {
       await this.handleHealthPlanActivated(event);
-      return;
+      return "handled";
     }
 
     if (event.event_type === "task.checkin_received") {
       await this.handleTaskCheckinReceived(event);
-      return;
+      return "handled";
     }
 
     if (event.event_type === "task.missed") {
       await this.handleTaskMissed(event);
+      return "handled";
     }
+
+    return "handled";
   }
 
   async ack(deliveryId: string): Promise<YouPetOutboxDelivery> {

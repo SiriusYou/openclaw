@@ -340,6 +340,7 @@ describe("YouPetOutboxConsumer", () => {
   });
 
   it("nacks processing failures without acknowledging the delivery", async () => {
+    const logger = { warn: vi.fn() };
     const { fetchFn, requests } = createFetch({
       events: [createCoreOutboxEvent("task.checkin_received", { task_id: "task-1" })],
     });
@@ -347,6 +348,7 @@ describe("YouPetOutboxConsumer", () => {
       coreBaseUrl: "https://core.example.com",
       serviceToken: "svc-token",
       fetchFn,
+      logger,
       handlers: {
         "task.checkin_received": () => {
           throw new Error("handler failed");
@@ -368,6 +370,9 @@ describe("YouPetOutboxConsumer", () => {
       "/internal/events/outbox/evt-task.checkin_received/nack",
     ]);
     expect(requests[1]?.body).toEqual({ error: "handler failed" });
+    expect(logger.warn).toHaveBeenCalledWith(
+      "[youpet] Nacking malformed or failed task.checkin_received delivery evt-task.checkin_received (domain event payload-evt-task.checkin_received): handler failed",
+    );
   });
 
   it("surfaces Core request failures to the caller", async () => {
@@ -533,6 +538,38 @@ describe("YouPetOutboxConsumer", () => {
     expect(logger.info).toHaveBeenCalledWith(
       "[youpet] Acknowledging unhandled outbox event type: future.event_type",
     );
+  });
+
+  it("nacks unknown event types when ackUnhandledEvents is false", async () => {
+    const logger = { info: vi.fn() };
+    const { fetchFn, requests } = createFetch({
+      events: [createCoreOutboxEvent("future.event_type", { task_id: "task-1" })],
+    });
+    const consumer = new YouPetOutboxConsumer({
+      coreBaseUrl: "https://core.example.com",
+      serviceToken: "svc-token",
+      fetchFn,
+      logger,
+      ackUnhandledEvents: false,
+    });
+
+    const result = await consumer.pollOnce();
+
+    expect(result).toEqual({
+      pulled: 1,
+      processed: 1,
+      acknowledged: 0,
+      nacked: 1,
+      skipped: 0,
+    });
+    expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+      "/internal/events/outbox",
+      "/internal/events/outbox/evt-future.event_type/nack",
+    ]);
+    expect(requests[1]?.body).toEqual({
+      error: "unsupported_event_type: future.event_type",
+    });
+    expect(logger.info).not.toHaveBeenCalled();
   });
 
   it("skips empty event_id deliveries before dispatch, ack, or nack", async () => {

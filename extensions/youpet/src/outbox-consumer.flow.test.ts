@@ -8,6 +8,7 @@ import {
 import { createCoreOutboxEvent } from "../test/outbox-consumer.fixture.js";
 import {
   createYouPetOutboxConsumerSettingsFromConfig,
+  YouPetCoreRequestError,
   YouPetOutboxConsumer,
   type YouPetOutboxDeliveryEnvelope,
   type YouPetOutboxFetch,
@@ -345,6 +346,109 @@ describe("YouPetOutboxConsumer health plan flows", () => {
       "/internal/events/outbox/evt-health_plan.activated-redelivery-1/ack",
       "/internal/events/outbox",
       "/internal/events/outbox/evt-health_plan.activated-redelivery-2/ack",
+    ]);
+  });
+
+  it("dedupes replayed health_plan.activated deliveries after an ack failure without repeating flow writeback", async () => {
+    const { flowStore, flows, processedEvents } = createYouPetTestFlowStore(
+      createYouPetTempStateEnv(),
+    );
+    const deliveryId = "evt-health_plan.activated-ack-retry";
+    const innerEventId = "health-plan-activation-business-ack-retry";
+    const replayedEvent = createReplayHealthPlanActivatedEvent({
+      deliveryId,
+      innerEventId,
+    });
+    const pollResponses: YouPetOutboxDeliveryEnvelope[][] = [[replayedEvent], [replayedEvent]];
+    const requests: CapturedRequest[] = [];
+    let ackAttempts = 0;
+    const fetchFn: YouPetOutboxFetch = async (input, init) => {
+      const url = typeof input === "string" || input instanceof URL ? String(input) : input.url;
+      const parsed = new URL(url);
+      const method = init?.method ?? "GET";
+      const headers = Object.fromEntries(new Headers(init?.headers).entries());
+      const body =
+        typeof init?.body === "string" && init.body.length > 0 ? JSON.parse(init.body) : undefined;
+      requests.push({ url, method, headers, body });
+
+      if (parsed.pathname === "/internal/events/outbox") {
+        return jsonResponse({ items: pollResponses.shift() ?? [] });
+      }
+      if (parsed.pathname === "/api/v1/health-plans/plan-1/flow") {
+        return jsonResponse({ openclaw_flow_id: body?.openclaw_flow_id });
+      }
+      if (parsed.pathname === `/internal/events/outbox/${deliveryId}/ack`) {
+        ackAttempts += 1;
+        if (ackAttempts === 1) {
+          return jsonResponse(
+            { detail: { code: "ack_failed", message: "delivery settlement retry" } },
+            500,
+          );
+        }
+        return jsonResponse({
+          event_id: deliveryId,
+          consumer: "openclaw",
+          state: "delivered",
+          attempts: 1,
+          next_attempt_at: "2026-06-01T00:00:00Z",
+        });
+      }
+      if (parsed.pathname.endsWith("/nack")) {
+        return jsonResponse({
+          event_id: parsed.pathname.split("/").at(-2),
+          consumer: "openclaw",
+          state: "pending",
+          attempts: 1,
+          next_attempt_at: "2026-06-01T00:05:00Z",
+        });
+      }
+      return jsonResponse({ detail: { code: "not_found", message: parsed.pathname } }, 404);
+    };
+    const consumer = new YouPetOutboxConsumer({
+      coreBaseUrl: "https://core.example.com",
+      serviceToken: "svc-token",
+      fetchFn,
+      flowStore,
+    });
+
+    await expect(consumer.pollOnce()).rejects.toBeInstanceOf(YouPetCoreRequestError);
+    const second = await consumer.pollOnce();
+
+    expect(second).toEqual({
+      pulled: 1,
+      processed: 1,
+      acknowledged: 1,
+      nacked: 0,
+      skipped: 0,
+    });
+    const flow = flowStore.lookupFlowByPlanId("plan-1");
+    expect(flow).toMatchObject({
+      plan_id: "plan-1",
+      pet_id: "pet-1",
+      core_linked: true,
+      created_from_event_id: innerEventId,
+      checkin_count: 0,
+      last_checkin_at: null,
+    });
+    expect(flows.entries()).toHaveLength(1);
+    expect(flowRequests(requests)).toHaveLength(1);
+    expect(ackAttempts).toBe(2);
+    expect(flowStore.lookupProcessedEvent(innerEventId)).toMatchObject({
+      flow_id: flow?.flow_id,
+      event_id: innerEventId,
+      event_type: "health_plan.activated",
+      aggregate_id: "plan-1",
+    });
+    expect(processedEvents.entries()).toHaveLength(1);
+    expect(
+      processedEvents.entries().filter((entry) => entry.key === `processed.${innerEventId}`),
+    ).toHaveLength(1);
+    expect(pathnames(requests)).toEqual([
+      "/internal/events/outbox",
+      "/api/v1/health-plans/plan-1/flow",
+      `/internal/events/outbox/${deliveryId}/ack`,
+      "/internal/events/outbox",
+      `/internal/events/outbox/${deliveryId}/ack`,
     ]);
   });
 

@@ -39,6 +39,12 @@ describe("YouPet Core outbox fixture drift", () => {
     });
 
     const expected = VENDORED_TASK_MISSED_FIXTURE.items[0];
+    const expectedInnerEventId = expected.payload.event_id;
+    expect(expectedInnerEventId).toEqual(expect.any(String));
+    expect(expectedInnerEventId).not.toHaveLength(0);
+    if (typeof expectedInnerEventId !== "string" || expectedInnerEventId.length === 0) {
+      throw new Error("Vendored Core fixture must include a non-empty payload.event_id");
+    }
     const businessPayload = expected.payload.payload as Record<string, unknown>;
     const emitted = createCoreOutboxEvent(expected.event_type, businessPayload);
     let normalized: YouPetOutboxEventEnvelope | undefined;
@@ -92,10 +98,7 @@ describe("YouPet Core outbox fixture drift", () => {
     expect(normalized).toEqual({
       ...expected,
       delivery_id: expected.event_id,
-      event_id:
-        typeof expected.payload.event_id === "string"
-          ? expected.payload.event_id
-          : expected.event_id,
+      event_id: expectedInnerEventId,
     });
   });
 });

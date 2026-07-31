@@ -50,7 +50,8 @@
       },
       "ackUnhandledEvents": {
         "type": "boolean",
-        "default": true
+        "default": true,
+        "description": "Acknowledge unsupported YouPet event types. When false, nack them with unsupported_event_type so Core retries and may eventually dead-letter the delivery."
       },
       "escalateMissedTasks": {
         "type": "boolean",
