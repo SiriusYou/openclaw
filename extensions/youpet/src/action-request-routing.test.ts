@@ -645,7 +645,6 @@ describe("YouPet ActionRequest dispatcher", () => {
           message: "cannot update execution after policy authorization expired",
           details: {
             policy_expires_at: "2026-08-10T01:05:00Z",
-            now: "2026-08-10T01:10:00.000Z",
           },
         },
       },
@@ -697,13 +696,11 @@ describe("YouPet ActionRequest dispatcher", () => {
       update: {
         state: "failed",
         expected_row_version: 4,
-        worker_id: "worker-a",
         error: {
           code: "execution_authorization_expired",
           message: "cannot update execution after policy authorization expired",
           details: {
             policy_expires_at: "2026-08-10T01:05:00Z",
-            now: "2026-08-10T01:10:00.000Z",
           },
         },
       },

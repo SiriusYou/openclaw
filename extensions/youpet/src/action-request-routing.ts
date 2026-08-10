@@ -605,7 +605,10 @@ export class YouPetActionRequestDispatcher {
       return true;
     }
 
-    const recovered = await this.tryExpiredAuthorizationRecovery(current, now);
+    const recovered = await this.tryExpiredAuthorizationRecovery(
+      current,
+      activeOwner === this.workerId ? this.workerId : undefined,
+    );
     if (!recovered) {
       result.conflicted += 1;
       return true;
@@ -674,7 +677,7 @@ export class YouPetActionRequestDispatcher {
 
   private async tryExpiredAuthorizationRecovery(
     current: YouPetActionRequestEnvelope,
-    now: Date,
+    workerId?: string,
   ): Promise<YouPetActionRequestEnvelope | undefined> {
     try {
       return await this.client.updateExecution({
@@ -682,8 +685,8 @@ export class YouPetActionRequestDispatcher {
         update: {
           state: "failed",
           expected_row_version: current.row_version,
-          worker_id: this.workerId,
-          error: buildExpiredAuthorizationRecoveryError(current.action_request, now),
+          ...(workerId ? { worker_id: workerId } : {}),
+          error: buildExpiredAuthorizationRecoveryError(current.action_request),
         },
         idempotencyKey: stableKey(
           "execution-recovery",
@@ -898,15 +901,13 @@ function hasPolicyAuthorizationExpired(request: YouPetActionRequest, now: Date):
 
 function buildExpiredAuthorizationRecoveryError(
   request: YouPetActionRequest,
-  now: Date,
 ): NonNullable<YouPetActionRequestExecutionUpdate["error"]> {
   return {
     code: EXECUTION_AUTHORIZATION_EXPIRED_CODE,
     message: EXECUTION_AUTHORIZATION_EXPIRED_MESSAGE,
-    details: {
-      ...(request.policy.expires_at ? { policy_expires_at: request.policy.expires_at } : {}),
-      now: now.toISOString(),
-    },
+    ...(request.policy.expires_at
+      ? { details: { policy_expires_at: request.policy.expires_at } }
+      : {}),
   };
 }
 
