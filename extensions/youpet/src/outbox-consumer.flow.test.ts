@@ -5,7 +5,10 @@ import {
   createYouPetTempStateEnv,
   createYouPetTestFlowStore,
 } from "../test/flow-store.fixture.js";
-import { createCoreOutboxEvent } from "../test/outbox-consumer.fixture.js";
+import {
+  actionRequestEnvelopeFromCreate,
+  createCoreOutboxEvent,
+} from "../test/outbox-consumer.fixture.js";
 import {
   createYouPetOutboxConsumerSettingsFromConfig,
   YouPetCoreRequestError,
@@ -54,7 +57,10 @@ function createFetch(events: YouPetOutboxDeliveryEnvelope[], flowResponses: Flow
     if (parsed.pathname === "/internal/events/outbox") {
       return jsonResponse({ items: events });
     }
-    if (parsed.pathname.match(/^\/api\/v1\/health-plans\/[^/]+\/flow$/)) {
+    if (parsed.pathname === "/api/v1/action-requests" && method === "POST") {
+      return jsonResponse(actionRequestEnvelopeFromCreate(body as never), 201);
+    }
+    if (/^\/api\/v1\/health-plans\/[^/]+\/flow$/.test(parsed.pathname)) {
       const next = flowResponses.shift() ?? { body: { openclaw_flow_id: body?.openclaw_flow_id } };
       if ("error" in next) {
         throw next.error;
@@ -97,20 +103,29 @@ function flowRequests(requests: CapturedRequest[]): CapturedRequest[] {
   );
 }
 
+function actionRequestCreates(requests: CapturedRequest[]): CapturedRequest[] {
+  return requests.filter(
+    (request) =>
+      request.method === "POST" && new URL(request.url).pathname === "/api/v1/action-requests",
+  );
+}
+
 function createCheckinEvent(
   businessPayload: Record<string, unknown> = {},
   overrides: Partial<YouPetOutboxDeliveryEnvelope> = {},
   innerEventId?: string,
 ): YouPetOutboxDeliveryEnvelope {
   const checkinId =
-    typeof businessPayload.checkin_id === "string" ? businessPayload.checkin_id : "checkin-1";
+    typeof businessPayload.checkin_id === "string"
+      ? businessPayload.checkin_id
+      : "00000000-0000-4000-8000-000000000601";
   return createCoreOutboxEvent(
     "task.checkin_received",
     {
-      task_id: "task-1",
+      task_id: "00000000-0000-4000-8000-000000000201",
       checkin_id: checkinId,
-      plan_id: "plan-1",
-      pet_id: "pet-1",
+      plan_id: "00000000-0000-4000-8000-000000000301",
+      pet_id: "00000000-0000-4000-8000-000000000501",
       ...businessPayload,
     },
     {
@@ -146,13 +161,13 @@ function createReplayHealthPlanActivatedEvent(params: {
   return createCoreOutboxEvent(
     "health_plan.activated",
     {
-      plan_id: params.planId ?? "plan-1",
-      pet_id: params.petId ?? "pet-1",
+      plan_id: params.planId ?? "00000000-0000-4000-8000-000000000301",
+      pet_id: params.petId ?? "00000000-0000-4000-8000-000000000501",
     },
     {
       event_id: params.deliveryId,
       aggregate_type: "health_plan",
-      aggregate_id: params.planId ?? "plan-1",
+      aggregate_id: params.planId ?? "00000000-0000-4000-8000-000000000301",
       correlation_id: "corr-flow",
     },
     { innerEventId: params.innerEventId },
@@ -165,15 +180,18 @@ afterEach(async () => {
 });
 
 describe("YouPetOutboxConsumer health plan flows", () => {
-  it("writes a newly-created health plan flow back through the production settings path", async () => {
+  it("persists a flow-link ActionRequest before acknowledging activation", async () => {
     const { flowStore } = createYouPetTestFlowStore(createYouPetTempStateEnv());
     const { fetchFn, requests } = createFetch([
       createCoreOutboxEvent(
         "health_plan.activated",
-        { plan_id: "plan-1", pet_id: "pet-1" },
+        {
+          plan_id: "00000000-0000-4000-8000-000000000301",
+          pet_id: "00000000-0000-4000-8000-000000000501",
+        },
         {
           aggregate_type: "health_plan",
-          aggregate_id: "plan-1",
+          aggregate_id: "00000000-0000-4000-8000-000000000301",
           correlation_id: "corr-flow",
         },
       ),
@@ -183,6 +201,7 @@ describe("YouPetOutboxConsumer health plan flows", () => {
         enabled: true,
         coreBaseUrl: "https://core.example.com",
         serviceToken: "svc-token",
+        tenantId: "00000000-0000-4000-8000-000000000101",
       },
       env: {},
     });
@@ -202,12 +221,12 @@ describe("YouPetOutboxConsumer health plan flows", () => {
       nacked: 0,
       skipped: 0,
     });
-    const flow = flowStore.lookupFlowByPlanId("plan-1");
+    const flow = flowStore.lookupFlowByPlanId("00000000-0000-4000-8000-000000000301");
     expect(flow).toMatchObject({
-      plan_id: "plan-1",
-      pet_id: "pet-1",
+      plan_id: "00000000-0000-4000-8000-000000000301",
+      pet_id: "00000000-0000-4000-8000-000000000501",
       status: "active",
-      core_linked: true,
+      core_linked: false,
       correlation_id: "corr-flow",
       created_from_event_id: "payload-evt-health_plan.activated",
       checkin_count: 0,
@@ -219,34 +238,54 @@ describe("YouPetOutboxConsumer health plan flows", () => {
     expect(flowStore.lookupProcessedEvent("payload-evt-health_plan.activated")).toMatchObject({
       flow_id: flow?.flow_id,
       event_type: "health_plan.activated",
-      aggregate_id: "plan-1",
+      aggregate_id: "00000000-0000-4000-8000-000000000301",
     });
-    const flowWriteback = flowRequests(requests);
-    expect(flowWriteback).toHaveLength(1);
-    expect(flowWriteback[0]).toMatchObject({
+    const proposals = actionRequestCreates(requests);
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0]).toMatchObject({
       method: "POST",
-      body: { openclaw_flow_id: flow?.flow_id },
+      body: {
+        tenant_id: "00000000-0000-4000-8000-000000000101",
+        action_type: "workflow.mutate",
+        target: {
+          type: "health_plan",
+          id: "00000000-0000-4000-8000-000000000301",
+        },
+        risk: "low",
+        policy: { outcome: "allow" },
+        payload: {
+          mode: "inline",
+          fields: {
+            health_plan_id: "00000000-0000-4000-8000-000000000301",
+            openclaw_flow_id: flow?.flow_id,
+          },
+        },
+      },
     });
-    expect(flowWriteback[0]?.headers["idempotency-key"]).toBe(
-      "openclaw:youpet:payload-evt-health_plan.activated:flow-link",
+    expect(proposals[0]?.headers["idempotency-key"]).toMatch(
+      /^openclaw\.youpet\.proposal\.[0-9a-f]{64}$/u,
     );
-    expect(flowWriteback[0]?.headers["x-correlation-id"]).toBe("corr-flow");
+    expect(proposals[0]?.headers["x-correlation-id"]).toBe("corr-flow");
+    expect(flowRequests(requests)).toHaveLength(0);
     expect(pathnames(requests)).toEqual([
       "/internal/events/outbox",
-      "/api/v1/health-plans/plan-1/flow",
+      "/api/v1/action-requests",
       "/internal/events/outbox/evt-health_plan.activated/ack",
     ]);
   });
 
-  it("does not write back again after the flow is linked", async () => {
+  it("reuses the same durable proposal until a dispatcher links the flow", async () => {
     const { flowStore } = createYouPetTestFlowStore(createYouPetTempStateEnv());
     const { fetchFn, requests } = createFetch([
       createCoreOutboxEvent(
         "health_plan.activated",
-        { plan_id: "plan-1", pet_id: "pet-1" },
+        {
+          plan_id: "00000000-0000-4000-8000-000000000301",
+          pet_id: "00000000-0000-4000-8000-000000000501",
+        },
         {
           aggregate_type: "health_plan",
-          aggregate_id: "plan-1",
+          aggregate_id: "00000000-0000-4000-8000-000000000301",
           correlation_id: "corr-flow",
         },
       ),
@@ -254,6 +293,7 @@ describe("YouPetOutboxConsumer health plan flows", () => {
     const consumer = new YouPetOutboxConsumer({
       coreBaseUrl: "https://core.example.com",
       serviceToken: "svc-token",
+      tenantId: "00000000-0000-4000-8000-000000000101",
       fetchFn,
       flowStore,
     });
@@ -268,8 +308,13 @@ describe("YouPetOutboxConsumer health plan flows", () => {
       nacked: 0,
       skipped: 0,
     });
-    expect(flowStore.lookupFlowByPlanId("plan-1")?.core_linked).toBe(true);
-    expect(flowRequests(requests)).toHaveLength(1);
+    expect(flowStore.lookupFlowByPlanId("00000000-0000-4000-8000-000000000301")?.core_linked).toBe(
+      false,
+    );
+    const proposals = actionRequestCreates(requests);
+    expect(proposals).toHaveLength(2);
+    expect(proposals[1]?.headers["idempotency-key"]).toBe(proposals[0]?.headers["idempotency-key"]);
+    expect(flowRequests(requests)).toHaveLength(0);
   });
 
   it("dedupes replayed health_plan.activated deliveries by payload event_id while acking each delivery row", async () => {
@@ -284,6 +329,7 @@ describe("YouPetOutboxConsumer health plan flows", () => {
     const consumer = new YouPetOutboxConsumer({
       coreBaseUrl: "https://core.example.com",
       serviceToken: "svc-token",
+      tenantId: "00000000-0000-4000-8000-000000000101",
       fetchFn,
       flowStore,
     });
@@ -307,22 +353,25 @@ describe("YouPetOutboxConsumer health plan flows", () => {
       skipped: 0,
     });
     expect(second).toEqual(first);
-    const flow = flowStore.lookupFlowByPlanId("plan-1");
+    const flow = flowStore.lookupFlowByPlanId("00000000-0000-4000-8000-000000000301");
     expect(flow).toMatchObject({
-      plan_id: "plan-1",
-      pet_id: "pet-1",
-      core_linked: true,
+      plan_id: "00000000-0000-4000-8000-000000000301",
+      pet_id: "00000000-0000-4000-8000-000000000501",
+      core_linked: false,
       correlation_id: "corr-flow",
       created_from_event_id: "health-plan-activation-business-1",
       checkin_count: 0,
       last_checkin_at: null,
     });
-    expect(flowRequests(requests)).toHaveLength(1);
+    const proposals = actionRequestCreates(requests);
+    expect(proposals).toHaveLength(2);
+    expect(proposals[1]?.headers["idempotency-key"]).toBe(proposals[0]?.headers["idempotency-key"]);
+    expect(flowRequests(requests)).toHaveLength(0);
     expect(flowStore.lookupProcessedEvent("health-plan-activation-business-1")).toMatchObject({
       flow_id: flow?.flow_id,
       event_id: "health-plan-activation-business-1",
       event_type: "health_plan.activated",
-      aggregate_id: "plan-1",
+      aggregate_id: "00000000-0000-4000-8000-000000000301",
     });
     expect(
       flowStore.lookupProcessedEvent("evt-health_plan.activated-redelivery-1"),
@@ -342,14 +391,15 @@ describe("YouPetOutboxConsumer health plan flows", () => {
     ).toEqual([]);
     expect(pathnames(requests)).toEqual([
       "/internal/events/outbox",
-      "/api/v1/health-plans/plan-1/flow",
+      "/api/v1/action-requests",
       "/internal/events/outbox/evt-health_plan.activated-redelivery-1/ack",
       "/internal/events/outbox",
+      "/api/v1/action-requests",
       "/internal/events/outbox/evt-health_plan.activated-redelivery-2/ack",
     ]);
   });
 
-  it("dedupes replayed health_plan.activated deliveries after an ack failure without repeating flow writeback", async () => {
+  it("replays the same durable proposal after an ack failure", async () => {
     const { flowStore, flows, processedEvents } = createYouPetTestFlowStore(
       createYouPetTempStateEnv(),
     );
@@ -374,8 +424,8 @@ describe("YouPetOutboxConsumer health plan flows", () => {
       if (parsed.pathname === "/internal/events/outbox") {
         return jsonResponse({ items: pollResponses.shift() ?? [] });
       }
-      if (parsed.pathname === "/api/v1/health-plans/plan-1/flow") {
-        return jsonResponse({ openclaw_flow_id: body?.openclaw_flow_id });
+      if (parsed.pathname === "/api/v1/action-requests" && method === "POST") {
+        return jsonResponse(actionRequestEnvelopeFromCreate(body as never), 201);
       }
       if (parsed.pathname === `/internal/events/outbox/${deliveryId}/ack`) {
         ackAttempts += 1;
@@ -407,6 +457,7 @@ describe("YouPetOutboxConsumer health plan flows", () => {
     const consumer = new YouPetOutboxConsumer({
       coreBaseUrl: "https://core.example.com",
       serviceToken: "svc-token",
+      tenantId: "00000000-0000-4000-8000-000000000101",
       fetchFn,
       flowStore,
     });
@@ -421,23 +472,26 @@ describe("YouPetOutboxConsumer health plan flows", () => {
       nacked: 0,
       skipped: 0,
     });
-    const flow = flowStore.lookupFlowByPlanId("plan-1");
+    const flow = flowStore.lookupFlowByPlanId("00000000-0000-4000-8000-000000000301");
     expect(flow).toMatchObject({
-      plan_id: "plan-1",
-      pet_id: "pet-1",
-      core_linked: true,
+      plan_id: "00000000-0000-4000-8000-000000000301",
+      pet_id: "00000000-0000-4000-8000-000000000501",
+      core_linked: false,
       created_from_event_id: innerEventId,
       checkin_count: 0,
       last_checkin_at: null,
     });
     expect(flows.entries()).toHaveLength(1);
-    expect(flowRequests(requests)).toHaveLength(1);
+    const proposals = actionRequestCreates(requests);
+    expect(proposals).toHaveLength(2);
+    expect(proposals[1]?.headers["idempotency-key"]).toBe(proposals[0]?.headers["idempotency-key"]);
+    expect(flowRequests(requests)).toHaveLength(0);
     expect(ackAttempts).toBe(2);
     expect(flowStore.lookupProcessedEvent(innerEventId)).toMatchObject({
       flow_id: flow?.flow_id,
       event_id: innerEventId,
       event_type: "health_plan.activated",
-      aggregate_id: "plan-1",
+      aggregate_id: "00000000-0000-4000-8000-000000000301",
     });
     expect(processedEvents.entries()).toHaveLength(1);
     expect(
@@ -445,9 +499,10 @@ describe("YouPetOutboxConsumer health plan flows", () => {
     ).toHaveLength(1);
     expect(pathnames(requests)).toEqual([
       "/internal/events/outbox",
-      "/api/v1/health-plans/plan-1/flow",
+      "/api/v1/action-requests",
       `/internal/events/outbox/${deliveryId}/ack`,
       "/internal/events/outbox",
+      "/api/v1/action-requests",
       `/internal/events/outbox/${deliveryId}/ack`,
     ]);
   });
@@ -457,9 +512,9 @@ describe("YouPetOutboxConsumer health plan flows", () => {
     flowStore.recordHealthPlanActivated({
       eventId: "evt-health-plan-1",
       eventType: "health_plan.activated",
-      aggregateId: "plan-1",
-      planId: "plan-1",
-      petId: "pet-1",
+      aggregateId: "00000000-0000-4000-8000-000000000301",
+      planId: "00000000-0000-4000-8000-000000000301",
+      petId: "00000000-0000-4000-8000-000000000501",
       correlationId: "corr-flow",
     });
     const { fetchFn, requests } = createFetch([createCheckinEvent()]);
@@ -468,6 +523,7 @@ describe("YouPetOutboxConsumer health plan flows", () => {
         enabled: true,
         coreBaseUrl: "https://core.example.com",
         serviceToken: "svc-token",
+        tenantId: "00000000-0000-4000-8000-000000000101",
       },
       env: {},
     });
@@ -487,10 +543,10 @@ describe("YouPetOutboxConsumer health plan flows", () => {
       nacked: 0,
       skipped: 0,
     });
-    const flow = flowStore.lookupFlowByPlanId("plan-1");
+    const flow = flowStore.lookupFlowByPlanId("00000000-0000-4000-8000-000000000301");
     expect(flow).toMatchObject({
-      plan_id: "plan-1",
-      pet_id: "pet-1",
+      plan_id: "00000000-0000-4000-8000-000000000301",
+      pet_id: "00000000-0000-4000-8000-000000000501",
       status: "active",
       checkin_count: 1,
     });
@@ -498,7 +554,7 @@ describe("YouPetOutboxConsumer health plan flows", () => {
     expect(flowStore.lookupProcessedEvent("payload-evt-task.checkin_received")).toMatchObject({
       flow_id: flow?.flow_id,
       event_type: "task.checkin_received",
-      aggregate_id: "checkin-1",
+      aggregate_id: "00000000-0000-4000-8000-000000000601",
     });
     expect(flowRequests(requests)).toHaveLength(0);
     expect(pathnames(requests)).toEqual([
@@ -512,15 +568,16 @@ describe("YouPetOutboxConsumer health plan flows", () => {
     flowStore.recordHealthPlanActivated({
       eventId: "evt-health-plan-1",
       eventType: "health_plan.activated",
-      aggregateId: "plan-1",
-      planId: "plan-1",
-      petId: "pet-1",
+      aggregateId: "00000000-0000-4000-8000-000000000301",
+      planId: "00000000-0000-4000-8000-000000000301",
+      petId: "00000000-0000-4000-8000-000000000501",
       correlationId: "corr-flow",
     });
     const { fetchFn, requests } = createFetch([createCheckinEvent()]);
     const consumer = new YouPetOutboxConsumer({
       coreBaseUrl: "https://core.example.com",
       serviceToken: "svc-token",
+      tenantId: "00000000-0000-4000-8000-000000000101",
       fetchFn,
       flowStore,
     });
@@ -536,7 +593,9 @@ describe("YouPetOutboxConsumer health plan flows", () => {
       skipped: 0,
     });
     expect(second).toEqual(first);
-    expect(flowStore.lookupFlowByPlanId("plan-1")?.checkin_count).toBe(1);
+    expect(
+      flowStore.lookupFlowByPlanId("00000000-0000-4000-8000-000000000301")?.checkin_count,
+    ).toBe(1);
     expect(
       processedEvents
         .entries()
@@ -555,20 +614,20 @@ describe("YouPetOutboxConsumer health plan flows", () => {
     flowStore.recordHealthPlanActivated({
       eventId: "evt-health-plan-1",
       eventType: "health_plan.activated",
-      aggregateId: "plan-1",
-      planId: "plan-1",
-      petId: "pet-1",
+      aggregateId: "00000000-0000-4000-8000-000000000301",
+      planId: "00000000-0000-4000-8000-000000000301",
+      petId: "00000000-0000-4000-8000-000000000501",
       correlationId: "corr-flow",
     });
     const firstDelivery = createReplayCheckinEvent({
       deliveryId: "evt-task.checkin_received-redelivery-1",
       innerEventId: "checkin-business-1",
-      checkinId: "checkin-1",
+      checkinId: "00000000-0000-4000-8000-000000000601",
     });
     const replayDelivery = createReplayCheckinEvent({
       deliveryId: "evt-task.checkin_received-redelivery-2",
       innerEventId: "checkin-business-1",
-      checkinId: "checkin-1",
+      checkinId: "00000000-0000-4000-8000-000000000601",
     });
     const secondBusinessDelivery = createReplayCheckinEvent({
       deliveryId: "evt-task.checkin_received-redelivery-3",
@@ -581,6 +640,7 @@ describe("YouPetOutboxConsumer health plan flows", () => {
     const consumer = new YouPetOutboxConsumer({
       coreBaseUrl: "https://core.example.com",
       serviceToken: "svc-token",
+      tenantId: "00000000-0000-4000-8000-000000000101",
       fetchFn,
       flowStore,
     });
@@ -600,7 +660,9 @@ describe("YouPetOutboxConsumer health plan flows", () => {
     });
     expect(second).toEqual(first);
     expect(third).toEqual(first);
-    expect(flowStore.lookupFlowByPlanId("plan-1")?.checkin_count).toBe(2);
+    expect(
+      flowStore.lookupFlowByPlanId("00000000-0000-4000-8000-000000000301")?.checkin_count,
+    ).toBe(2);
     expect(
       processedEvents.entries().filter((entry) => entry.value.event_id === "checkin-business-1"),
     ).toHaveLength(1);
@@ -617,7 +679,7 @@ describe("YouPetOutboxConsumer health plan flows", () => {
     ]);
   });
 
-  it("lazy-creates an unlinked flow from an out-of-order check-in and links it on activation", async () => {
+  it("lazy-creates an unlinked flow and proposes linking it on activation", async () => {
     const { flowStore, flows } = createYouPetTestFlowStore(createYouPetTempStateEnv());
     const checkinFetch = createFetch([
       createCheckinEvent(
@@ -630,12 +692,13 @@ describe("YouPetOutboxConsumer health plan flows", () => {
     const checkinConsumer = new YouPetOutboxConsumer({
       coreBaseUrl: "https://core.example.com",
       serviceToken: "svc-token",
+      tenantId: "00000000-0000-4000-8000-000000000101",
       fetchFn: checkinFetch.fetchFn,
       flowStore,
     });
 
     const checkinResult = await checkinConsumer.pollOnce();
-    const created = flowStore.lookupFlowByPlanId("plan-1");
+    const created = flowStore.lookupFlowByPlanId("00000000-0000-4000-8000-000000000301");
 
     expect(checkinResult).toEqual({
       pulled: 1,
@@ -645,8 +708,8 @@ describe("YouPetOutboxConsumer health plan flows", () => {
       skipped: 0,
     });
     expect(created).toMatchObject({
-      plan_id: "plan-1",
-      pet_id: "pet-1",
+      plan_id: "00000000-0000-4000-8000-000000000301",
+      pet_id: "00000000-0000-4000-8000-000000000501",
       core_linked: false,
       correlation_id: "corr-checkin",
       created_from_event_id: "payload-evt-task.checkin_received",
@@ -657,10 +720,13 @@ describe("YouPetOutboxConsumer health plan flows", () => {
     const activationFetch = createFetch([
       createCoreOutboxEvent(
         "health_plan.activated",
-        { plan_id: "plan-1", pet_id: "pet-1" },
+        {
+          plan_id: "00000000-0000-4000-8000-000000000301",
+          pet_id: "00000000-0000-4000-8000-000000000501",
+        },
         {
           aggregate_type: "health_plan",
-          aggregate_id: "plan-1",
+          aggregate_id: "00000000-0000-4000-8000-000000000301",
           correlation_id: "corr-activation",
         },
       ),
@@ -668,12 +734,13 @@ describe("YouPetOutboxConsumer health plan flows", () => {
     const activationConsumer = new YouPetOutboxConsumer({
       coreBaseUrl: "https://core.example.com",
       serviceToken: "svc-token",
+      tenantId: "00000000-0000-4000-8000-000000000101",
       fetchFn: activationFetch.fetchFn,
       flowStore,
     });
 
     const activationResult = await activationConsumer.pollOnce();
-    const linked = flowStore.lookupFlowByPlanId("plan-1");
+    const linked = flowStore.lookupFlowByPlanId("00000000-0000-4000-8000-000000000301");
 
     expect(activationResult).toEqual({
       pulled: 1,
@@ -684,15 +751,16 @@ describe("YouPetOutboxConsumer health plan flows", () => {
     });
     expect(linked).toMatchObject({
       flow_id: created?.flow_id,
-      core_linked: true,
+      core_linked: false,
       checkin_count: 1,
       correlation_id: "corr-checkin",
     });
     expect(flows.entries()).toHaveLength(1);
-    expect(flowRequests(activationFetch.requests)).toHaveLength(1);
+    expect(actionRequestCreates(activationFetch.requests)).toHaveLength(1);
+    expect(flowRequests(activationFetch.requests)).toHaveLength(0);
     expect(pathnames(activationFetch.requests)).toEqual([
       "/internal/events/outbox",
-      "/api/v1/health-plans/plan-1/flow",
+      "/api/v1/action-requests",
       "/internal/events/outbox/evt-health_plan.activated/ack",
     ]);
   });
@@ -707,6 +775,7 @@ describe("YouPetOutboxConsumer health plan flows", () => {
         enabled: true,
         coreBaseUrl: "https://core.example.com",
         serviceToken: "svc-token",
+        tenantId: "00000000-0000-4000-8000-000000000101",
         manageFlows: false,
       },
       env: {},
@@ -754,7 +823,7 @@ describe("YouPetOutboxConsumer health plan flows", () => {
         { checkin_id: null },
         {
           event_id: "evt-checkin-missing-checkin",
-          aggregate_id: "task-1",
+          aggregate_id: "00000000-0000-4000-8000-000000000201",
         },
       ),
       warning:
@@ -787,6 +856,7 @@ describe("YouPetOutboxConsumer health plan flows", () => {
       const consumer = new YouPetOutboxConsumer({
         coreBaseUrl: "https://core.example.com",
         serviceToken: "svc-token",
+        tenantId: "00000000-0000-4000-8000-000000000101",
         fetchFn,
         flowStore,
         logger,
@@ -811,145 +881,6 @@ describe("YouPetOutboxConsumer health plan flows", () => {
     });
   }
 
-  it("terminally acknowledges Core flow-id conflicts and does not retry them", async () => {
-    const logger = { warn: vi.fn() };
-    const { flowStore } = createYouPetTestFlowStore(createYouPetTempStateEnv());
-    const { fetchFn, requests } = createFetch(
-      [
-        createCoreOutboxEvent(
-          "health_plan.activated",
-          { plan_id: "plan-1", pet_id: "pet-1" },
-          {
-            aggregate_type: "health_plan",
-            aggregate_id: "plan-1",
-            correlation_id: "corr-flow",
-          },
-        ),
-      ],
-      [
-        {
-          status: 409,
-          body: {
-            detail: {
-              code: "flow_id_conflict",
-              current_flow_id: "flow-existing",
-              attempted_flow_id: "flow-attempted",
-            },
-          },
-        },
-      ],
-    );
-    const consumer = new YouPetOutboxConsumer({
-      coreBaseUrl: "https://core.example.com",
-      serviceToken: "svc-token",
-      fetchFn,
-      flowStore,
-      logger,
-    });
-
-    const first = await consumer.pollOnce();
-    const second = await consumer.pollOnce();
-
-    expect(first).toEqual({
-      pulled: 1,
-      processed: 1,
-      acknowledged: 1,
-      nacked: 0,
-      skipped: 0,
-    });
-    expect(second).toEqual(first);
-    expect(flowStore.lookupFlowByPlanId("plan-1")?.core_linked).toBe(true);
-    expect(flowRequests(requests)).toHaveLength(1);
-    expect(pathnames(requests)).not.toContain(
-      "/internal/events/outbox/evt-health_plan.activated/nack",
-    );
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("terminal health_plan.activated flow-link conflict"),
-    );
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining('"current_flow_id":"flow-existing"'),
-    );
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining('"attempted_flow_id":"flow-attempted"'),
-    );
-  });
-
-  for (const scenario of [
-    {
-      name: "404 not found",
-      failure: { status: 404, body: { detail: { code: "not_found" } } },
-    },
-    {
-      name: "422 validation",
-      failure: { status: 422, body: { detail: { code: "invalid_input" } } },
-    },
-    {
-      name: "500 server error",
-      failure: { status: 500, body: { detail: { code: "core_error" } } },
-    },
-    {
-      name: "non-terminal 409",
-      failure: { status: 409, body: { detail: { code: "permission_denied" } } },
-    },
-    {
-      name: "network error",
-      failure: { error: new Error("network down") },
-    },
-  ] satisfies Array<{ name: string; failure: FlowResponse }>) {
-    it(`nacks ${scenario.name} flow writeback failures and retries on redelivery`, async () => {
-      const { flowStore } = createYouPetTestFlowStore(createYouPetTempStateEnv());
-      const { fetchFn, requests } = createFetch(
-        [
-          createCoreOutboxEvent(
-            "health_plan.activated",
-            { plan_id: "plan-1", pet_id: "pet-1" },
-            {
-              aggregate_type: "health_plan",
-              aggregate_id: "plan-1",
-              correlation_id: "corr-flow",
-            },
-          ),
-        ],
-        [scenario.failure, { body: { openclaw_flow_id: "linked" } }],
-      );
-      const consumer = new YouPetOutboxConsumer({
-        coreBaseUrl: "https://core.example.com",
-        serviceToken: "svc-token",
-        fetchFn,
-        flowStore,
-      });
-
-      const first = await consumer.pollOnce();
-      expect(first).toEqual({
-        pulled: 1,
-        processed: 1,
-        acknowledged: 0,
-        nacked: 1,
-        skipped: 0,
-      });
-      expect(flowStore.lookupFlowByPlanId("plan-1")?.core_linked).toBe(false);
-
-      const second = await consumer.pollOnce();
-      expect(second).toEqual({
-        pulled: 1,
-        processed: 1,
-        acknowledged: 1,
-        nacked: 0,
-        skipped: 0,
-      });
-      expect(flowStore.lookupFlowByPlanId("plan-1")?.core_linked).toBe(true);
-      expect(flowRequests(requests)).toHaveLength(2);
-      expect(pathnames(requests)).toEqual([
-        "/internal/events/outbox",
-        "/api/v1/health-plans/plan-1/flow",
-        "/internal/events/outbox/evt-health_plan.activated/nack",
-        "/internal/events/outbox",
-        "/api/v1/health-plans/plan-1/flow",
-        "/internal/events/outbox/evt-health_plan.activated/ack",
-      ]);
-    });
-  }
-
   it("nacks malformed health_plan.activated payloads without creating a flow", async () => {
     const logger = { warn: vi.fn() };
     const { flowStore, flows, processedEvents } = createYouPetTestFlowStore(
@@ -958,17 +889,18 @@ describe("YouPetOutboxConsumer health plan flows", () => {
     const { fetchFn, requests } = createFetch([
       createCoreOutboxEvent(
         "health_plan.activated",
-        { pet_id: "pet-1" },
+        { pet_id: "00000000-0000-4000-8000-000000000501" },
         {
           event_id: "evt-health-plan-missing-plan",
           aggregate_type: "health_plan",
-          aggregate_id: "plan-1",
+          aggregate_id: "00000000-0000-4000-8000-000000000301",
         },
       ),
     ]);
     const consumer = new YouPetOutboxConsumer({
       coreBaseUrl: "https://core.example.com",
       serviceToken: "svc-token",
+      tenantId: "00000000-0000-4000-8000-000000000101",
       fetchFn,
       flowStore,
       logger,
@@ -997,6 +929,40 @@ describe("YouPetOutboxConsumer health plan flows", () => {
     );
   });
 
+  it("rejects a non-UUID health plan target before writing local flow state", async () => {
+    const logger = { warn: vi.fn() };
+    const { flowStore, flows, processedEvents } = createYouPetTestFlowStore(
+      createYouPetTempStateEnv(),
+    );
+    const { fetchFn, requests } = createFetch([
+      createCoreOutboxEvent(
+        "health_plan.activated",
+        { plan_id: "plan-1", pet_id: "00000000-0000-4000-8000-000000000501" },
+        {
+          event_id: "evt-health-plan-invalid-plan",
+          aggregate_type: "health_plan",
+          aggregate_id: "plan-1",
+        },
+      ),
+    ]);
+    const consumer = new YouPetOutboxConsumer({
+      coreBaseUrl: "https://core.example.com",
+      serviceToken: "svc-token",
+      tenantId: "00000000-0000-4000-8000-000000000101",
+      fetchFn,
+      flowStore,
+      logger,
+    });
+
+    expect(await consumer.pollOnce()).toMatchObject({ acknowledged: 0, nacked: 1 });
+    expect(flows.entries()).toEqual([]);
+    expect(processedEvents.entries()).toEqual([]);
+    expect(actionRequestCreates(requests)).toHaveLength(0);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "[youpet] Malformed health_plan.activated event payload-evt-health-plan-invalid-plan: plan_id must be a UUID",
+    );
+  });
+
   it("acknowledges health_plan.activated without flow creation when manageFlows is disabled", async () => {
     const { flowStore, flows, processedEvents } = createYouPetTestFlowStore(
       createYouPetTempStateEnv(),
@@ -1004,10 +970,13 @@ describe("YouPetOutboxConsumer health plan flows", () => {
     const { fetchFn, requests } = createFetch([
       createCoreOutboxEvent(
         "health_plan.activated",
-        { plan_id: "plan-1", pet_id: "pet-1" },
+        {
+          plan_id: "00000000-0000-4000-8000-000000000301",
+          pet_id: "00000000-0000-4000-8000-000000000501",
+        },
         {
           aggregate_type: "health_plan",
-          aggregate_id: "plan-1",
+          aggregate_id: "00000000-0000-4000-8000-000000000301",
         },
       ),
     ]);
@@ -1016,6 +985,7 @@ describe("YouPetOutboxConsumer health plan flows", () => {
         enabled: true,
         coreBaseUrl: "https://core.example.com",
         serviceToken: "svc-token",
+        tenantId: "00000000-0000-4000-8000-000000000101",
         manageFlows: false,
       },
       env: {},
@@ -1056,7 +1026,7 @@ describe("YouPetOutboxConsumer health plan flows", () => {
         {
           event_id: "evt-health-plan-missing-payload",
           aggregate_type: "health_plan",
-          aggregate_id: "plan-1",
+          aggregate_id: "00000000-0000-4000-8000-000000000301",
           // Core nests business fields under payload.payload; an envelope whose
           // payload object lacks the nested payload must nack, not silently drop.
           payload: {
@@ -1069,6 +1039,7 @@ describe("YouPetOutboxConsumer health plan flows", () => {
     const consumer = new YouPetOutboxConsumer({
       coreBaseUrl: "https://core.example.com",
       serviceToken: "svc-token",
+      tenantId: "00000000-0000-4000-8000-000000000101",
       fetchFn,
       flowStore,
       logger,

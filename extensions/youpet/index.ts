@@ -9,7 +9,8 @@ import {
 const plugin = definePluginEntry({
   id: "youpet",
   name: "YouPet Core",
-  description: "Consumes YouPet Core outbox deliveries for orchestration actions.",
+  description:
+    "Consumes YouPet Core outbox deliveries, proposes bounded ActionRequests, and dispatches authorized mutations.",
   register(api: OpenClawPluginApi) {
     let consumer: YouPetOutboxConsumer | undefined;
     const flowStore = openYouPetFlowStore(api.runtime.state);
@@ -26,7 +27,7 @@ const plugin = definePluginEntry({
         }
         if (!isYouPetOutboxConsumerConfigured(settings)) {
           ctx.logger.warn(
-            "[youpet] Outbox consumer enabled but missing coreBaseUrl or serviceToken",
+            "[youpet] Outbox consumer enabled but missing coreBaseUrl, serviceToken, or a valid UUID tenantId",
           );
           return;
         }

@@ -9,6 +9,7 @@ import {
   createYouPetTestRuntimeState,
 } from "./test/flow-store.fixture.js";
 import {
+  actionRequestEnvelopeFromCreate,
   createCoreOutboxEvent,
   TASK_MISSED_CORE_OUTBOX_EVENT,
 } from "./test/outbox-consumer.fixture.js";
@@ -41,11 +42,11 @@ function createFetch(events: ReturnType<typeof createCoreOutboxEvent>[]) {
     if (parsed.pathname === "/internal/events/outbox") {
       return jsonResponse({ items: events });
     }
-    if (parsed.pathname.match(/^\/api\/v1\/health-plans\/[^/]+\/flow$/)) {
-      return jsonResponse({ ok: true });
+    if (parsed.pathname === "/api/v1/action-requests" && method === "POST") {
+      return jsonResponse(actionRequestEnvelopeFromCreate(body as never), 201);
     }
-    if (parsed.pathname === "/api/v1/tasks/task-1/escalate") {
-      return jsonResponse({ id: "alert-1", status: "open" }, 201);
+    if (parsed.pathname === "/api/v1/action-requests" && method === "GET") {
+      return jsonResponse({ items: [], count: 0 });
     }
     if (parsed.pathname.endsWith("/ack")) {
       return jsonResponse({
@@ -70,14 +71,25 @@ function createFetch(events: ReturnType<typeof createCoreOutboxEvent>[]) {
   return { fetchFn, requests };
 }
 
-async function waitForRequestCount(requests: CapturedRequest[], count: number): Promise<void> {
+async function waitForRequestPath(requests: CapturedRequest[], path: string): Promise<void> {
   for (let attempt = 0; attempt < 50; attempt += 1) {
-    if (requests.length >= count) {
+    if (requests.some((request) => new URL(request.url).pathname === path)) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
   }
-  throw new Error(`timed out waiting for ${count} requests`);
+  throw new Error(`timed out waiting for ${path}`);
+}
+
+function sourceCyclePaths(requests: CapturedRequest[]): string[] {
+  return requests
+    .filter(
+      (request) =>
+        !(request.method === "GET" && new URL(request.url).pathname === "/api/v1/action-requests"),
+    )
+    .map((request) => new URL(request.url).pathname);
 }
 
 afterEach(async () => {
@@ -87,7 +99,7 @@ afterEach(async () => {
 });
 
 describe("youpet plugin registration", () => {
-  it("wires health plan flow creation through the production outbox service path", async () => {
+  it("wires health plan proposal creation through the production outbox service path", async () => {
     const env = createYouPetTempStateEnv();
     const runtimeState = createYouPetTestRuntimeState(env);
     const openSyncKeyedStore = vi.fn(runtimeState.openSyncKeyedStore);
@@ -95,10 +107,13 @@ describe("youpet plugin registration", () => {
     const { fetchFn, requests } = createFetch([
       createCoreOutboxEvent(
         "health_plan.activated",
-        { plan_id: "plan-1", pet_id: "pet-1" },
+        {
+          plan_id: "00000000-0000-4000-8000-000000000301",
+          pet_id: "00000000-0000-4000-8000-000000000501",
+        },
         {
           aggregate_type: "health_plan",
-          aggregate_id: "plan-1",
+          aggregate_id: "00000000-0000-4000-8000-000000000301",
           correlation_id: "corr-flow",
         },
       ),
@@ -114,6 +129,7 @@ describe("youpet plugin registration", () => {
           enabled: true,
           coreBaseUrl: "https://core.example.com",
           serviceToken: "svc-token",
+          tenantId: "00000000-0000-4000-8000-000000000101",
           pollIntervalMs: 60_000,
         },
         runtime: { state: { openSyncKeyedStore } } as never,
@@ -130,29 +146,39 @@ describe("youpet plugin registration", () => {
       stateDir: "",
       config: {},
     });
-    await waitForRequestCount(requests, 2);
+    await waitForRequestPath(requests, "/internal/events/outbox/evt-health_plan.activated/ack");
     service.stop?.();
 
     const flowStore = createYouPetTestFlowStore(env).flowStore;
     expect(openSyncKeyedStore).toHaveBeenCalledTimes(2);
-    expect(flowStore.lookupFlowByPlanId("plan-1")).toMatchObject({
-      plan_id: "plan-1",
-      pet_id: "pet-1",
+    expect(flowStore.lookupFlowByPlanId("00000000-0000-4000-8000-000000000301")).toMatchObject({
+      plan_id: "00000000-0000-4000-8000-000000000301",
+      pet_id: "00000000-0000-4000-8000-000000000501",
       status: "active",
-      core_linked: true,
+      core_linked: false,
       correlation_id: "corr-flow",
     });
-    expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+    expect(sourceCyclePaths(requests)).toEqual([
       "/internal/events/outbox",
-      "/api/v1/health-plans/plan-1/flow",
+      "/api/v1/action-requests",
       "/internal/events/outbox/evt-health_plan.activated/ack",
     ]);
-    const writeback = requests.find(
-      (request) => new URL(request.url).pathname === "/api/v1/health-plans/plan-1/flow",
+    const proposal = requests.find(
+      (request) =>
+        request.method === "POST" && new URL(request.url).pathname === "/api/v1/action-requests",
     );
-    expect(writeback?.method).toBe("POST");
-    expect(writeback?.body).toEqual({
-      openclaw_flow_id: flowStore.lookupFlowByPlanId("plan-1")?.flow_id,
+    expect(proposal?.body).toMatchObject({
+      action_type: "workflow.mutate",
+      target: {
+        type: "health_plan",
+        id: "00000000-0000-4000-8000-000000000301",
+      },
+      payload: {
+        fields: {
+          openclaw_flow_id: flowStore.lookupFlowByPlanId("00000000-0000-4000-8000-000000000301")
+            ?.flow_id,
+        },
+      },
     });
   });
 
@@ -165,14 +191,14 @@ describe("youpet plugin registration", () => {
       createCoreOutboxEvent(
         "task.checkin_received",
         {
-          task_id: "task-1",
-          checkin_id: "checkin-1",
-          plan_id: "plan-1",
-          pet_id: "pet-1",
+          task_id: "00000000-0000-4000-8000-000000000201",
+          checkin_id: "00000000-0000-4000-8000-000000000601",
+          plan_id: "00000000-0000-4000-8000-000000000301",
+          pet_id: "00000000-0000-4000-8000-000000000501",
         },
         {
           aggregate_type: "checkin",
-          aggregate_id: "checkin-1",
+          aggregate_id: "00000000-0000-4000-8000-000000000601",
           correlation_id: "corr-checkin",
         },
       ),
@@ -188,6 +214,7 @@ describe("youpet plugin registration", () => {
           enabled: true,
           coreBaseUrl: "https://core.example.com",
           serviceToken: "svc-token",
+          tenantId: "00000000-0000-4000-8000-000000000101",
           pollIntervalMs: 60_000,
         },
         runtime: { state: { openSyncKeyedStore } } as never,
@@ -204,20 +231,20 @@ describe("youpet plugin registration", () => {
       stateDir: "",
       config: {},
     });
-    await waitForRequestCount(requests, 2);
+    await waitForRequestPath(requests, "/internal/events/outbox/evt-task.checkin_received/ack");
     service.stop?.();
 
     const flowStore = createYouPetTestFlowStore(env).flowStore;
     expect(openSyncKeyedStore).toHaveBeenCalledTimes(2);
-    expect(flowStore.lookupFlowByPlanId("plan-1")).toMatchObject({
-      plan_id: "plan-1",
-      pet_id: "pet-1",
+    expect(flowStore.lookupFlowByPlanId("00000000-0000-4000-8000-000000000301")).toMatchObject({
+      plan_id: "00000000-0000-4000-8000-000000000301",
+      pet_id: "00000000-0000-4000-8000-000000000501",
       status: "active",
       core_linked: false,
       correlation_id: "corr-checkin",
       checkin_count: 1,
     });
-    expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+    expect(sourceCyclePaths(requests)).toEqual([
       "/internal/events/outbox",
       "/internal/events/outbox/evt-task.checkin_received/ack",
     ]);
@@ -231,24 +258,27 @@ describe("youpet plugin registration", () => {
     const { fetchFn, requests } = createFetch([
       createCoreOutboxEvent(
         "health_plan.activated",
-        { plan_id: "plan-1", pet_id: "pet-1" },
+        {
+          plan_id: "00000000-0000-4000-8000-000000000301",
+          pet_id: "00000000-0000-4000-8000-000000000501",
+        },
         {
           aggregate_type: "health_plan",
-          aggregate_id: "plan-1",
+          aggregate_id: "00000000-0000-4000-8000-000000000301",
           correlation_id: "corr-flow",
         },
       ),
       createCoreOutboxEvent(
         "task.checkin_received",
         {
-          task_id: "task-1",
-          checkin_id: "checkin-1",
-          plan_id: "plan-1",
-          pet_id: "pet-1",
+          task_id: "00000000-0000-4000-8000-000000000201",
+          checkin_id: "00000000-0000-4000-8000-000000000601",
+          plan_id: "00000000-0000-4000-8000-000000000301",
+          pet_id: "00000000-0000-4000-8000-000000000501",
         },
         {
           aggregate_type: "checkin",
-          aggregate_id: "checkin-1",
+          aggregate_id: "00000000-0000-4000-8000-000000000601",
           correlation_id: "corr-checkin",
         },
       ),
@@ -265,6 +295,7 @@ describe("youpet plugin registration", () => {
           enabled: true,
           coreBaseUrl: "https://core.example.com",
           serviceToken: "svc-token",
+          tenantId: "00000000-0000-4000-8000-000000000101",
           pollIntervalMs: 60_000,
         },
         runtime: { state: { openSyncKeyedStore } } as never,
@@ -281,38 +312,44 @@ describe("youpet plugin registration", () => {
       stateDir: "",
       config: {},
     });
-    await waitForRequestCount(requests, 6);
+    await waitForRequestPath(requests, "/internal/events/outbox/evt-task.missed/ack");
     service.stop?.();
 
     const flowStore = createYouPetTestFlowStore(env).flowStore;
-    const flow = flowStore.lookupFlowByPlanId("plan-1");
+    const flow = flowStore.lookupFlowByPlanId("00000000-0000-4000-8000-000000000301");
     expect(openSyncKeyedStore).toHaveBeenCalledTimes(2);
     expect(flow).toMatchObject({
-      plan_id: "plan-1",
-      pet_id: "pet-1",
+      plan_id: "00000000-0000-4000-8000-000000000301",
+      pet_id: "00000000-0000-4000-8000-000000000501",
       status: "active",
-      core_linked: true,
+      core_linked: false,
       checkin_count: 1,
     });
-    expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+    expect(sourceCyclePaths(requests)).toEqual([
       "/internal/events/outbox",
-      "/api/v1/health-plans/plan-1/flow",
+      "/api/v1/action-requests",
       "/internal/events/outbox/evt-health_plan.activated/ack",
       "/internal/events/outbox/evt-task.checkin_received/ack",
-      "/api/v1/tasks/task-1/escalate",
+      "/api/v1/action-requests",
       "/internal/events/outbox/evt-task.missed/ack",
     ]);
+    const proposals = requests.filter(
+      (request) =>
+        request.method === "POST" && new URL(request.url).pathname === "/api/v1/action-requests",
+    );
     expect(
-      requests.find(
-        (request) => new URL(request.url).pathname === "/api/v1/health-plans/plan-1/flow",
-      )?.body,
-    ).toEqual({ openclaw_flow_id: flow?.flow_id });
-    expect(
-      requests.find((request) => new URL(request.url).pathname === "/api/v1/tasks/task-1/escalate")
-        ?.body,
-    ).toEqual({
-      severity: "medium",
-      summary: "Task missed the configured YouPet check-in threshold.",
+      proposals.map((request) => (request.body as { action_type: string }).action_type),
+    ).toEqual(["workflow.mutate", "task.escalate"]);
+    expect(proposals[0]?.body).toMatchObject({
+      payload: { fields: { openclaw_flow_id: flow?.flow_id } },
+    });
+    expect(proposals[1]?.body).toMatchObject({
+      payload: {
+        fields: {
+          severity: "medium",
+          summary: "Task missed the configured YouPet check-in threshold.",
+        },
+      },
     });
     expect(requests.some((request) => new URL(request.url).pathname.endsWith("/nack"))).toBe(false);
   });
