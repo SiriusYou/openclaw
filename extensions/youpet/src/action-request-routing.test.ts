@@ -750,6 +750,35 @@ describe("YouPet ActionRequest dispatcher", () => {
     );
   });
 
+  it("never recovers an expired running request outside the closed YouPet route inventory", async () => {
+    const currentNow = new Date("2026-08-10T01:10:00Z");
+    const foreign = createEnvelope({
+      requestId: nthUuid(985),
+      proposerId: "foreign-agent",
+      executionState: "running",
+      rowVersion: 4,
+      executionClaimOwnerId: "foreign-worker",
+      executionClaimLeaseExpiresAt: "2026-08-10T01:00:00Z",
+      policyExpiresAt: "2026-08-10T01:05:00Z",
+    });
+    const executeMutation = vi.fn();
+    const core = new FakeActionRequestCore(foreign, { now: () => currentNow });
+    const dispatcher = new YouPetActionRequestDispatcher({
+      client: core,
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      workerId: "worker-a",
+      executeMutation,
+      now: () => currentNow,
+    });
+
+    const result = await dispatcher.dispatchOnce();
+
+    expect(result).toMatchObject({ skipped: 1, failed: 0, errored: 0, conflicted: 0 });
+    expect(core.updateAttempts).toEqual([]);
+    expect(executeMutation).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["pending", "require_approval", undefined],
     ["rejected", "require_approval", undefined],

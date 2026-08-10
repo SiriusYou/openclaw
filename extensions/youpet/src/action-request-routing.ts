@@ -585,6 +585,10 @@ export class YouPetActionRequestDispatcher {
     const now = this.now();
     if (
       current.action_request.execution.state !== "running" ||
+      !matchActionRequestRouteInventory(current, {
+        tenantId: this.tenantId,
+        actorId: this.actorId,
+      }) ||
       !hasPolicyAuthorizationExpired(current.action_request, now)
     ) {
       return false;
@@ -708,14 +712,24 @@ export function matchActionRequestRoute(
   envelope: YouPetActionRequestEnvelope,
   params: { tenantId: string; actorId: string; now: Date },
 ): YouPetActionRequestRouteId | undefined {
+  const routeId = matchActionRequestRouteInventory(envelope, params);
+  if (!routeId || !isAuthorized(envelope.action_request, params.now)) {
+    return undefined;
+  }
+  return routeId;
+}
+
+function matchActionRequestRouteInventory(
+  envelope: YouPetActionRequestEnvelope,
+  params: { tenantId: string; actorId: string },
+): YouPetActionRequestRouteId | undefined {
   const request = envelope.action_request;
   if (
     request.tenant_id !== params.tenantId ||
     request.proposer.type !== "agent" ||
     request.proposer.id !== params.actorId ||
     request.payload.mode !== "inline" ||
-    request.links.domain_event_ids.length === 0 ||
-    !isAuthorized(request, params.now)
+    request.links.domain_event_ids.length === 0
   ) {
     return undefined;
   }
