@@ -114,6 +114,11 @@ export type YouPetActionRequestEnvelope = {
   execution_claim: YouPetActionRequestExecutionClaim | null;
 };
 
+export type YouPetActionRequestListPage = {
+  items: YouPetActionRequestEnvelope[];
+  nextCursor: string | null;
+};
+
 export type YouPetActionRequestExecutionState = "not_started" | "queued" | "running";
 
 export type YouPetActionRequestExecutionUpdate = {
@@ -194,7 +199,8 @@ export class YouPetActionRequestClient {
     approvalState: "approved" | "not_required";
     executionState: YouPetActionRequestExecutionState;
     limit?: number;
-  }): Promise<YouPetActionRequestEnvelope[]> {
+    cursor?: string;
+  }): Promise<YouPetActionRequestListPage> {
     requireUuid(params.tenantId, "tenant_id");
     const body = await this.requestJson("/api/v1/action-requests", {
       method: "GET",
@@ -202,14 +208,21 @@ export class YouPetActionRequestClient {
         tenant_id: params.tenantId,
         approval_state: params.approvalState,
         execution_state: params.executionState,
-        limit: String(params.limit ?? 200),
+        limit: String(params.limit ?? ACTION_REQUEST_PAGE_LIMIT),
+        ...(params.cursor ? { cursor: params.cursor } : {}),
       },
     });
     const record = requireRecord(body, "ActionRequest list response");
     if (!Array.isArray(record.items)) {
       throw new Error("ActionRequest list response.items must be an array");
     }
-    return record.items.map((item) => parseActionRequestEnvelope(item));
+    return {
+      items: record.items.map((item) => parseActionRequestEnvelope(item)),
+      nextCursor:
+        record.next_cursor === null || record.next_cursor === undefined
+          ? null
+          : requireString(record.next_cursor, "ActionRequest list response.next_cursor"),
+    };
   }
 
   async updateExecution(params: {
@@ -376,7 +389,15 @@ export type YouPetActionRequestDispatchResult = {
   retried: number;
   skipped: number;
   conflicted: number;
+  errored: number;
 };
+
+const ACTION_REQUEST_PAGE_LIMIT = 200;
+// Defensive invariant only; normal dispatch is expected to paginate to exhaustion.
+const ACTION_REQUEST_PAGE_INVARIANT_LIMIT = 10_000;
+const EXECUTION_AUTHORIZATION_EXPIRED_CODE = "execution_authorization_expired";
+const EXECUTION_AUTHORIZATION_EXPIRED_MESSAGE =
+  "cannot update execution after policy authorization expired";
 
 export class YouPetActionRequestDispatcher {
   private readonly client: Pick<
@@ -419,38 +440,69 @@ export class YouPetActionRequestDispatcher {
       retried: 0,
       skipped: 0,
       conflicted: 0,
+      errored: 0,
     };
     const candidates = new Map<string, YouPetActionRequestEnvelope>();
     for (const executionState of ["running", "queued", "not_started"] as const) {
       for (const approvalState of ["approved", "not_required"] as const) {
-        const items = await this.client.list({
-          tenantId: this.tenantId,
-          approvalState,
-          executionState,
-          limit: 200,
-        });
-        result.listed += items.length;
-        if (items.length === 200) {
-          this.logger?.warn?.(
-            `[youpet] ActionRequest dispatch list reached the Core limit for approval=${approvalState} execution=${executionState}; remaining requests will be retried on a later cycle`,
-          );
-        }
-        for (const item of items) {
-          candidates.set(item.action_request.id, item);
-        }
+        await this.collectCandidatePages({ approvalState, executionState }, candidates, result);
       }
     }
 
     for (const candidate of candidates.values()) {
-      await this.dispatchCandidate(candidate, result);
+      try {
+        await this.dispatchCandidate(candidate, result);
+      } catch (error) {
+        result.errored += 1;
+        this.logger?.error?.(
+          `[youpet] ActionRequest ${candidate.action_request.id} dispatch failed: ${summarizeDispatchError(error)}`,
+        );
+      }
     }
     return result;
+  }
+
+  private async collectCandidatePages(
+    params: {
+      approvalState: "approved" | "not_required";
+      executionState: YouPetActionRequestExecutionState;
+    },
+    candidates: Map<string, YouPetActionRequestEnvelope>,
+    result: YouPetActionRequestDispatchResult,
+  ): Promise<void> {
+    let cursor: string | undefined;
+    const seenCursors = new Set<string>();
+    for (let page = 0; page < ACTION_REQUEST_PAGE_INVARIANT_LIMIT; page += 1) {
+      const response = await this.client.list({
+        tenantId: this.tenantId,
+        approvalState: params.approvalState,
+        executionState: params.executionState,
+        limit: ACTION_REQUEST_PAGE_LIMIT,
+        ...(cursor ? { cursor } : {}),
+      });
+      result.listed += response.items.length;
+      for (const item of response.items) {
+        candidates.set(item.action_request.id, item);
+      }
+      if (!response.nextCursor) {
+        return;
+      }
+      if (seenCursors.has(response.nextCursor)) {
+        throw new Error("ActionRequest dispatch received a repeated next_cursor from Core");
+      }
+      seenCursors.add(response.nextCursor);
+      cursor = response.nextCursor;
+    }
+    throw new Error("ActionRequest dispatch exceeded the pagination invariant guard");
   }
 
   private async dispatchCandidate(
     initial: YouPetActionRequestEnvelope,
     result: YouPetActionRequestDispatchResult,
   ): Promise<void> {
+    if (await this.recoverExpiredRunningCandidate(initial, result)) {
+      return;
+    }
     const routeId = matchActionRequestRoute(initial, {
       tenantId: this.tenantId,
       actorId: this.actorId,
@@ -526,6 +578,42 @@ export class YouPetActionRequestDispatcher {
     }
   }
 
+  private async recoverExpiredRunningCandidate(
+    current: YouPetActionRequestEnvelope,
+    result: YouPetActionRequestDispatchResult,
+  ): Promise<boolean> {
+    const now = this.now();
+    if (
+      current.action_request.execution.state !== "running" ||
+      !hasPolicyAuthorizationExpired(current.action_request, now)
+    ) {
+      return false;
+    }
+
+    const activeOwner = hasActiveExecutionClaim(
+      current,
+      current.execution_claim?.owner_id ?? "",
+      now,
+    )
+      ? (current.execution_claim?.owner_id ?? null)
+      : null;
+    if (activeOwner && activeOwner !== this.workerId) {
+      this.logger?.warn?.(
+        `[youpet] Leaving expired running ActionRequest ${current.action_request.id} with active foreign owner ${activeOwner}`,
+      );
+      result.skipped += 1;
+      return true;
+    }
+
+    const recovered = await this.tryExpiredAuthorizationRecovery(current, now);
+    if (!recovered) {
+      result.conflicted += 1;
+      return true;
+    }
+    result.failed += 1;
+    return true;
+  }
+
   private async tryTransition(
     current: YouPetActionRequestEnvelope,
     state: "queued" | "succeeded" | "failed",
@@ -577,6 +665,34 @@ export class YouPetActionRequestDispatcher {
       });
     } catch (error) {
       if (isClaimConflict(error)) {
+        await this.client.get(current.action_request.id);
+        return undefined;
+      }
+      throw error;
+    }
+  }
+
+  private async tryExpiredAuthorizationRecovery(
+    current: YouPetActionRequestEnvelope,
+    now: Date,
+  ): Promise<YouPetActionRequestEnvelope | undefined> {
+    try {
+      return await this.client.updateExecution({
+        actionRequestId: current.action_request.id,
+        update: {
+          state: "failed",
+          expected_row_version: current.row_version,
+          worker_id: this.workerId,
+          error: buildExpiredAuthorizationRecoveryError(current.action_request, now),
+        },
+        idempotencyKey: stableKey(
+          "execution-recovery",
+          current.action_request.id,
+          String(current.row_version),
+        ),
+      });
+    } catch (error) {
+      if (isExpiredAuthorizationRecoveryConflict(error)) {
         await this.client.get(current.action_request.id);
         return undefined;
       }
@@ -664,11 +780,8 @@ function validateProposalPayload(
 }
 
 function isAuthorized(request: YouPetActionRequest, now: Date): boolean {
-  if (request.policy.expires_at) {
-    const expiresAt = new Date(request.policy.expires_at);
-    if (!Number.isFinite(expiresAt.valueOf()) || expiresAt <= now) {
-      return false;
-    }
+  if (hasPolicyAuthorizationExpired(request, now)) {
+    return false;
   }
   if (request.policy.outcome === "allow") {
     return request.approval.state === "not_required";
@@ -762,6 +875,46 @@ function isClaimConflict(error: unknown): boolean {
     error instanceof YouPetActionRequestCoreError &&
     (error.code === "concurrency_conflict" || error.code === "execution_lease_conflict")
   );
+}
+
+function isExpiredAuthorizationRecoveryConflict(error: unknown): boolean {
+  return (
+    error instanceof YouPetActionRequestCoreError &&
+    (error.code === "concurrency_conflict" ||
+      error.code === "execution_claim_required" ||
+      error.code === "execution_lease_conflict" ||
+      error.code === "execution_lease_not_owner" ||
+      error.code === "execution_lease_expired")
+  );
+}
+
+function hasPolicyAuthorizationExpired(request: YouPetActionRequest, now: Date): boolean {
+  if (!request.policy.expires_at) {
+    return false;
+  }
+  const expiresAt = new Date(request.policy.expires_at);
+  return Number.isFinite(expiresAt.valueOf()) && expiresAt <= now;
+}
+
+function buildExpiredAuthorizationRecoveryError(
+  request: YouPetActionRequest,
+  now: Date,
+): NonNullable<YouPetActionRequestExecutionUpdate["error"]> {
+  return {
+    code: EXECUTION_AUTHORIZATION_EXPIRED_CODE,
+    message: EXECUTION_AUTHORIZATION_EXPIRED_MESSAGE,
+    details: {
+      ...(request.policy.expires_at ? { policy_expires_at: request.policy.expires_at } : {}),
+      now: now.toISOString(),
+    },
+  };
+}
+
+function summarizeDispatchError(error: unknown): string {
+  if (error instanceof YouPetActionRequestCoreError) {
+    return `YouPet Core ActionRequest request failed ${error.status} ${error.path}`;
+  }
+  return "candidate execution aborted";
 }
 
 function readCoreErrorCode(value: unknown): string | undefined {

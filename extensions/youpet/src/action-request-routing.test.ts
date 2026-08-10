@@ -173,7 +173,9 @@ describe("YouPet ActionRequest client boundary", () => {
         url.pathname === "/api/v1/action-requests" && !url.search
           ? envelope
           : url.pathname === "/api/v1/action-requests"
-            ? { items: [envelope], count: 1 }
+            ? url.searchParams.get("cursor") === "cursor-page-2"
+              ? { items: [envelope], count: 1, next_cursor: null }
+              : { items: [envelope], count: 1, next_cursor: "cursor-page-2" }
             : envelope,
       );
     });
@@ -204,6 +206,12 @@ describe("YouPet ActionRequest client boundary", () => {
       approvalState: "approved",
       executionState: "not_started",
     });
+    await client.list({
+      tenantId: TENANT_ID,
+      approvalState: "approved",
+      executionState: "not_started",
+      cursor: "cursor-page-2",
+    });
     await client.updateExecution({
       actionRequestId: REQUEST_ID,
       update: { state: "queued", expected_row_version: 1 },
@@ -224,15 +232,16 @@ describe("YouPet ActionRequest client boundary", () => {
       "/api/v1/action-requests",
       `/api/v1/action-requests/${REQUEST_ID}`,
       "/api/v1/action-requests?tenant_id=00000000-0000-4000-8000-000000000101&approval_state=approved&execution_state=not_started&limit=200",
+      "/api/v1/action-requests?tenant_id=00000000-0000-4000-8000-000000000101&approval_state=approved&execution_state=not_started&limit=200&cursor=cursor-page-2",
       `/api/v1/action-requests/${REQUEST_ID}/execution-status`,
       `/api/v1/action-requests/${REQUEST_ID}/execution-claim`,
       `/api/v1/action-requests/${REQUEST_ID}/execution-status`,
     ]);
     expect(captured.some((entry) => /\/(approve|reject)$/u.test(entry.path))).toBe(false);
     expect(captured[0]?.headers.get("idempotency-key")).toBe(proposal.idempotencyKey);
-    expect(captured[3]?.body).toEqual({ state: "queued", expected_row_version: 1 });
-    expect(captured[4]?.body).toEqual({ worker_id: "worker-a", expected_row_version: 2 });
-    expect(captured[5]?.body).toEqual({
+    expect(captured[4]?.body).toEqual({ state: "queued", expected_row_version: 1 });
+    expect(captured[5]?.body).toEqual({ worker_id: "worker-a", expected_row_version: 2 });
+    expect(captured[6]?.body).toEqual({
       state: "succeeded",
       expected_row_version: 3,
       worker_id: "worker-a",
@@ -283,6 +292,122 @@ describe("YouPet ActionRequest dispatcher", () => {
     expect(executeMutation.mock.calls[0]?.[0].idempotencyKey).toBe(
       stableYouPetMutationKey(REQUEST_ID, "task-escalate"),
     );
+  });
+
+  it("paginates past 200 newer unmatched rows and still executes an older valid request", async () => {
+    const valid = createEnvelope({ requestId: nthUuid(901) });
+    const firstPage = Array.from({ length: 200 }, (_, index) =>
+      createEnvelope({
+        requestId: nthUuid(index + 1),
+        proposerId: `foreign-agent-${index + 1}`,
+      }),
+    );
+    const core = new FakeActionRequestCore(valid, {
+      listPages: {
+        "approved:not_started": [firstPage, [valid]],
+      },
+    });
+    const executeMutation = vi.fn(async () => ({
+      kind: "succeeded" as const,
+      result: { outcome_code: "task_escalated" },
+    }));
+    const dispatcher = new YouPetActionRequestDispatcher({
+      client: core,
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      workerId: "worker-a",
+      executeMutation,
+    });
+
+    const result = await dispatcher.dispatchOnce();
+
+    expect(result).toMatchObject({
+      listed: 201,
+      skipped: 200,
+      claimed: 1,
+      succeeded: 1,
+      conflicted: 0,
+    });
+    expect(core.listRequests).toEqual([
+      { approvalState: "approved", executionState: "running", cursor: undefined },
+      { approvalState: "not_required", executionState: "running", cursor: undefined },
+      { approvalState: "approved", executionState: "queued", cursor: undefined },
+      { approvalState: "not_required", executionState: "queued", cursor: undefined },
+      { approvalState: "approved", executionState: "not_started", cursor: undefined },
+      {
+        approvalState: "approved",
+        executionState: "not_started",
+        cursor: "approved:not_started:1",
+      },
+      { approvalState: "not_required", executionState: "not_started", cursor: undefined },
+    ]);
+    expect(executeMutation).toHaveBeenCalledOnce();
+  });
+
+  it("fails the cycle when Core repeats next_cursor during pagination", async () => {
+    const client = {
+      async list() {
+        return { items: [], nextCursor: "stuck-cursor" };
+      },
+      async get() {
+        return createEnvelope();
+      },
+      async claimExecution() {
+        return createEnvelope();
+      },
+      async updateExecution() {
+        return createEnvelope();
+      },
+    };
+    const dispatcher = new YouPetActionRequestDispatcher({
+      client,
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      executeMutation: async () => ({ kind: "retry" }),
+    });
+
+    await expect(dispatcher.dispatchOnce()).rejects.toThrow(/repeated next_cursor/u);
+  });
+
+  it("isolates one candidate error, logs a secret-safe summary, and still executes later candidates", async () => {
+    const broken = createEnvelope({ requestId: nthUuid(950) });
+    const valid = createEnvelope({ requestId: nthUuid(951) });
+    const logger = {
+      error: vi.fn(),
+    };
+    const executeMutation = vi.fn(async ({ envelope }) => {
+      if (envelope.action_request.id === broken.action_request.id) {
+        throw new Error("boom secret token sk-should-not-appear");
+      }
+      return { kind: "succeeded" as const, result: { outcome_code: "task_escalated" } };
+    });
+    const dispatcher = new YouPetActionRequestDispatcher({
+      client: new FakeActionRequestCore(valid, {
+        listPages: {
+          "approved:not_started": [[broken, valid]],
+        },
+      }),
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      workerId: "worker-a",
+      executeMutation,
+      logger,
+    });
+
+    const result = await dispatcher.dispatchOnce();
+
+    expect(result).toMatchObject({
+      claimed: 2,
+      succeeded: 1,
+      errored: 1,
+      failed: 0,
+      conflicted: 0,
+    });
+    expect(executeMutation).toHaveBeenCalledTimes(2);
+    expect(logger.error).toHaveBeenCalledWith(
+      `[youpet] ActionRequest ${broken.action_request.id} dispatch failed: candidate execution aborted`,
+    );
+    expect(logger.error.mock.calls[0]?.[0]).not.toContain("sk-should-not-appear");
   });
 
   it("lets only one concurrent worker win the not-started CAS", async () => {
@@ -449,7 +574,7 @@ describe("YouPet ActionRequest dispatcher", () => {
     });
     const client = {
       async list() {
-        return [structuredClone(running)];
+        return { items: [structuredClone(running)], nextCursor: null };
       },
       async get() {
         return structuredClone(running);
@@ -483,6 +608,149 @@ describe("YouPet ActionRequest dispatcher", () => {
       succeeded: 0,
     });
     expect(executeMutation).toHaveBeenCalledOnce();
+  });
+
+  it("fails an expired running request without executing the mutation when this worker still owns the active lease", async () => {
+    const currentNow = new Date("2026-08-10T01:10:00Z");
+    const running = createEnvelope({
+      requestId: nthUuid(980),
+      executionState: "running",
+      rowVersion: 4,
+      executionClaimOwnerId: "worker-a",
+      executionClaimLeaseExpiresAt: "2026-08-10T01:20:00Z",
+      policyExpiresAt: "2026-08-10T01:05:00Z",
+    });
+    const executeMutation = vi.fn();
+    const core = new FakeActionRequestCore(running, { now: () => currentNow });
+    const dispatcher = new YouPetActionRequestDispatcher({
+      client: core,
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      workerId: "worker-a",
+      executeMutation,
+      now: () => currentNow,
+    });
+
+    const result = await dispatcher.dispatchOnce();
+
+    expect(result).toMatchObject({ failed: 1, claimed: 0, conflicted: 0, succeeded: 0 });
+    expect(executeMutation).not.toHaveBeenCalled();
+    expect(core.updates[0]).toMatchObject({
+      update: {
+        state: "failed",
+        expected_row_version: 4,
+        worker_id: "worker-a",
+        error: {
+          code: "execution_authorization_expired",
+          message: "cannot update execution after policy authorization expired",
+          details: {
+            policy_expires_at: "2026-08-10T01:05:00Z",
+            now: "2026-08-10T01:10:00.000Z",
+          },
+        },
+      },
+    });
+  });
+
+  it("sends the exact expired-authorization recovery payload, counts a conflict, and continues later candidates when the lease is expired", async () => {
+    const currentNow = new Date("2026-08-10T01:10:00Z");
+    const expired = createEnvelope({
+      requestId: nthUuid(981),
+      executionState: "running",
+      rowVersion: 4,
+      executionClaimOwnerId: "worker-a",
+      executionClaimLeaseExpiresAt: "2026-08-10T01:00:00Z",
+      policyExpiresAt: "2026-08-10T01:05:00Z",
+    });
+    const valid = createEnvelope({ requestId: nthUuid(982) });
+    const executeMutation = vi.fn(async () => ({
+      kind: "succeeded" as const,
+      result: { outcome_code: "task_escalated" },
+    }));
+    const core = new FakeActionRequestCore(valid, {
+      now: () => currentNow,
+      listPages: {
+        "approved:running": [[expired]],
+        "approved:not_started": [[valid]],
+      },
+    });
+    const dispatcher = new YouPetActionRequestDispatcher({
+      client: core,
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      workerId: "worker-a",
+      executeMutation,
+      now: () => currentNow,
+    });
+
+    const result = await dispatcher.dispatchOnce();
+
+    expect(result).toMatchObject({
+      conflicted: 1,
+      claimed: 1,
+      succeeded: 1,
+      failed: 0,
+      errored: 0,
+    });
+    expect(executeMutation).toHaveBeenCalledOnce();
+    expect(core.updateAttempts[0]).toMatchObject({
+      update: {
+        state: "failed",
+        expected_row_version: 4,
+        worker_id: "worker-a",
+        error: {
+          code: "execution_authorization_expired",
+          message: "cannot update execution after policy authorization expired",
+          details: {
+            policy_expires_at: "2026-08-10T01:05:00Z",
+            now: "2026-08-10T01:10:00.000Z",
+          },
+        },
+      },
+    });
+  });
+
+  it("leaves an expired running request alone when another worker still owns the active lease", async () => {
+    const currentNow = new Date("2026-08-10T01:10:00Z");
+    const foreignRunning = createEnvelope({
+      requestId: nthUuid(983),
+      executionState: "running",
+      rowVersion: 4,
+      executionClaimOwnerId: "worker-foreign",
+      executionClaimLeaseExpiresAt: "2026-08-10T01:20:00Z",
+      policyExpiresAt: "2026-08-10T01:05:00Z",
+    });
+    const valid = createEnvelope({ requestId: nthUuid(984) });
+    const executeMutation = vi.fn(async () => ({
+      kind: "succeeded" as const,
+      result: { outcome_code: "task_escalated" },
+    }));
+    const logger = { warn: vi.fn() };
+    const core = new FakeActionRequestCore(valid, {
+      now: () => currentNow,
+      listPages: {
+        "approved:running": [[foreignRunning]],
+        "approved:not_started": [[valid]],
+      },
+    });
+    const dispatcher = new YouPetActionRequestDispatcher({
+      client: core,
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      workerId: "worker-a",
+      executeMutation,
+      logger,
+      now: () => currentNow,
+    });
+
+    const result = await dispatcher.dispatchOnce();
+
+    expect(result).toMatchObject({ skipped: 1, claimed: 1, succeeded: 1, conflicted: 0 });
+    expect(core.updateAttempts).toHaveLength(2);
+    expect(core.updateAttempts[0]?.update.state).toBe("queued");
+    expect(logger.warn).toHaveBeenCalledWith(
+      `[youpet] Leaving expired running ActionRequest ${foreignRunning.action_request.id} with active foreign owner worker-foreign`,
+    );
   });
 
   it.each([
@@ -590,6 +858,9 @@ describe("YouPet ActionRequest dispatcher", () => {
 
 function createEnvelope(
   overrides: {
+    requestId?: string;
+    proposerId?: string;
+    targetId?: string;
     approvalState?: string;
     executionState?: string;
     executionClaimOwnerId?: string | null;
@@ -601,18 +872,20 @@ function createEnvelope(
     rowVersion?: number;
   } = {},
 ): YouPetActionRequestEnvelope {
+  const requestId = overrides.requestId ?? REQUEST_ID;
+  const targetId = overrides.targetId ?? TASK_ID;
   return {
     action_request: {
-      id: REQUEST_ID,
+      id: requestId,
       tenant_id: TENANT_ID,
-      proposer: { type: "agent", id: ACTOR_ID },
-      target: { type: "task_instance", id: TASK_ID },
+      proposer: { type: "agent", id: overrides.proposerId ?? ACTOR_ID },
+      target: { type: "task_instance", id: targetId },
       action_type: "task.escalate",
       risk: overrides.risk ?? "high",
       payload: {
         mode: "inline",
         fields: {
-          task_id: TASK_ID,
+          task_id: targetId,
           severity: "medium",
           summary: "Task missed the configured YouPet check-in threshold.",
         },
@@ -645,10 +918,16 @@ function createEnvelope(
 }
 
 class FakeActionRequestCore {
-  private state: { value: YouPetActionRequestEnvelope };
+  private state: { values: Map<string, YouPetActionRequestEnvelope> };
+  private readonly primaryRequestId: string;
   private readonly frozenList: YouPetActionRequestEnvelope | undefined;
   private readonly includeRegardlessOfFilters: boolean;
+  private readonly listPages: Partial<Record<string, YouPetActionRequestEnvelope[][]>>;
   readonly updates: Array<{
+    update: YouPetActionRequestExecutionUpdate;
+    idempotencyKey: string;
+  }> = [];
+  readonly updateAttempts: Array<{
     update: YouPetActionRequestExecutionUpdate;
     idempotencyKey: string;
   }> = [];
@@ -656,18 +935,33 @@ class FakeActionRequestCore {
     claim: { worker_id: string; expected_row_version: number };
     idempotencyKey: string;
   }> = [];
+  readonly listRequests: Array<{
+    approvalState: string;
+    executionState: string;
+    cursor: string | undefined;
+  }> = [];
 
   constructor(
     envelope: YouPetActionRequestEnvelope,
     options: {
       frozenList?: YouPetActionRequestEnvelope;
       includeRegardlessOfFilters?: boolean;
+      listPages?: Partial<Record<string, YouPetActionRequestEnvelope[][]>>;
       now?: () => Date;
     } = {},
   ) {
-    this.state = { value: structuredClone(envelope) };
+    this.primaryRequestId = envelope.action_request.id;
+    this.state = {
+      values: new Map(
+        collectFakeStateEnvelopes(envelope, options).map((item) => [
+          item.action_request.id,
+          structuredClone(item),
+        ]),
+      ),
+    };
     this.frozenList = options.frozenList;
     this.includeRegardlessOfFilters = options.includeRegardlessOfFilters ?? false;
+    this.listPages = options.listPages ?? {};
     this.now = options.now ?? (() => new Date());
   }
 
@@ -677,30 +971,50 @@ class FakeActionRequestCore {
     this.state = other.state;
   }
 
-  async get(): Promise<YouPetActionRequestEnvelope> {
-    return structuredClone(this.state.value);
+  async get(actionRequestId = this.primaryRequestId): Promise<YouPetActionRequestEnvelope> {
+    return structuredClone(this.requireState(actionRequestId));
   }
 
   async list(params: {
     approvalState: string;
     executionState: string;
-  }): Promise<YouPetActionRequestEnvelope[]> {
-    const source = this.frozenList ?? this.state.value;
+    cursor?: string;
+  }): Promise<{ items: YouPetActionRequestEnvelope[]; nextCursor: string | null }> {
+    this.listRequests.push({
+      approvalState: params.approvalState,
+      executionState: params.executionState,
+      cursor: params.cursor,
+    });
+    const bucketKey = `${params.approvalState}:${params.executionState}`;
+    const bucketPages = this.listPages[bucketKey];
+    if (bucketPages) {
+      const pageIndex = params.cursor ? Number(params.cursor.split(":").at(-1)) : 0;
+      const items = bucketPages[pageIndex] ?? [];
+      return {
+        items: structuredClone(items),
+        nextCursor: pageIndex + 1 < bucketPages.length ? `${bucketKey}:${pageIndex + 1}` : null,
+      };
+    }
+    const source = this.frozenList ?? this.requireState(this.primaryRequestId);
     if (
       this.includeRegardlessOfFilters ||
       (source.action_request.approval.state === params.approvalState &&
         source.action_request.execution.state === params.executionState)
     ) {
-      return [structuredClone(source)];
+      return { items: [structuredClone(source)], nextCursor: null };
     }
-    return [];
+    return { items: [], nextCursor: null };
   }
 
   async updateExecution(params: {
+    actionRequestId?: string;
     update: YouPetActionRequestExecutionUpdate;
     idempotencyKey: string;
   }): Promise<YouPetActionRequestEnvelope> {
-    if (params.update.expected_row_version !== this.state.value.row_version) {
+    const actionRequestId = params.actionRequestId ?? this.primaryRequestId;
+    const current = this.requireState(actionRequestId);
+    this.updateAttempts.push({ update: params.update, idempotencyKey: params.idempotencyKey });
+    if (params.update.expected_row_version !== current.row_version) {
       throw new YouPetActionRequestCoreError({
         status: 409,
         path: "/execution-status",
@@ -708,11 +1022,11 @@ class FakeActionRequestCore {
       });
     }
     if (
-      this.state.value.action_request.execution.state === "running" &&
+      current.action_request.execution.state === "running" &&
       ["succeeded", "failed", "cancelled"].includes(params.update.state)
     ) {
-      const owner = this.state.value.execution_claim?.owner_id;
-      const leaseExpiresAt = this.state.value.execution_claim?.lease_expires_at;
+      const owner = current.execution_claim?.owner_id;
+      const leaseExpiresAt = current.execution_claim?.lease_expires_at;
       if (!owner || !leaseExpiresAt || !params.update.worker_id) {
         throw new YouPetActionRequestCoreError({
           status: 409,
@@ -736,35 +1050,39 @@ class FakeActionRequestCore {
       }
     }
     this.updates.push({ update: params.update, idempotencyKey: params.idempotencyKey });
-    this.state.value = {
-      ...this.state.value,
+    const next = {
+      ...current,
       action_request: {
-        ...this.state.value.action_request,
+        ...current.action_request,
         execution: { state: params.update.state },
         updated_at: "2026-08-09T01:31:00Z",
       },
       execution_claim: ["succeeded", "failed", "cancelled"].includes(params.update.state)
         ? null
-        : this.state.value.execution_claim,
-      row_version: this.state.value.row_version + 1,
+        : current.execution_claim,
+      row_version: current.row_version + 1,
     };
-    return structuredClone(this.state.value);
+    this.state.values.set(actionRequestId, next);
+    return structuredClone(next);
   }
 
   async claimExecution(params: {
+    actionRequestId?: string;
     claim: { worker_id: string; expected_row_version: number };
     idempotencyKey: string;
   }): Promise<YouPetActionRequestEnvelope> {
-    if (params.claim.expected_row_version !== this.state.value.row_version) {
+    const actionRequestId = params.actionRequestId ?? this.primaryRequestId;
+    const current = this.requireState(actionRequestId);
+    if (params.claim.expected_row_version !== current.row_version) {
       throw new YouPetActionRequestCoreError({
         status: 409,
         path: "/execution-claim",
         code: "concurrency_conflict",
       });
     }
-    const currentState = this.state.value.action_request.execution.state;
-    const currentOwner = this.state.value.execution_claim?.owner_id ?? null;
-    const currentExpiry = this.state.value.execution_claim?.lease_expires_at ?? null;
+    const currentState = current.action_request.execution.state;
+    const currentOwner = current.execution_claim?.owner_id ?? null;
+    const currentExpiry = current.execution_claim?.lease_expires_at ?? null;
     const activeOwner =
       currentOwner && currentExpiry && new Date(currentExpiry) > this.now() ? currentOwner : null;
     if (currentState !== "queued" && currentState !== "running") {
@@ -778,10 +1096,10 @@ class FakeActionRequestCore {
       });
     }
     this.claims.push({ claim: params.claim, idempotencyKey: params.idempotencyKey });
-    this.state.value = {
-      ...this.state.value,
+    const next = {
+      ...current,
       action_request: {
-        ...this.state.value.action_request,
+        ...current.action_request,
         execution: { state: "running" },
         updated_at: "2026-08-09T01:31:00Z",
       },
@@ -789,9 +1107,18 @@ class FakeActionRequestCore {
         owner_id: params.claim.worker_id,
         lease_expires_at: new Date(this.now().valueOf() + 5 * 60_000).toISOString(),
       },
-      row_version: this.state.value.row_version + 1,
+      row_version: current.row_version + 1,
     };
-    return structuredClone(this.state.value);
+    this.state.values.set(actionRequestId, next);
+    return structuredClone(next);
+  }
+
+  private requireState(actionRequestId: string): YouPetActionRequestEnvelope {
+    const current = this.state.values.get(actionRequestId);
+    if (!current) {
+      throw new Error(`missing test ActionRequest state for ${actionRequestId}`);
+    }
+    return current;
   }
 }
 
@@ -800,4 +1127,33 @@ function jsonResponse(body: unknown, status = 200): Response {
     status,
     headers: { "content-type": "application/json" },
   });
+}
+
+function nthUuid(index: number): string {
+  return `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
+}
+
+function collectFakeStateEnvelopes(
+  envelope: YouPetActionRequestEnvelope,
+  options: {
+    frozenList?: YouPetActionRequestEnvelope;
+    listPages?: Partial<Record<string, YouPetActionRequestEnvelope[][]>>;
+  },
+): YouPetActionRequestEnvelope[] {
+  const collected = new Map<string, YouPetActionRequestEnvelope>();
+  const remember = (item: YouPetActionRequestEnvelope | undefined) => {
+    if (item) {
+      collected.set(item.action_request.id, item);
+    }
+  };
+  remember(envelope);
+  remember(options.frozenList);
+  for (const pages of Object.values(options.listPages ?? {})) {
+    for (const page of pages ?? []) {
+      for (const item of page) {
+        remember(item);
+      }
+    }
+  }
+  return [...collected.values()];
 }

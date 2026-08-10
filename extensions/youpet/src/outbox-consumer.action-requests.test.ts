@@ -492,7 +492,11 @@ describe("YouPet ActionRequest mutation dispatch", () => {
       fetchFn: first.fetchFn,
     });
 
-    await expect(firstConsumer.dispatchActionRequestsOnce()).rejects.toThrow(/execution-status/u);
+    await expect(firstConsumer.dispatchActionRequestsOnce()).resolves.toMatchObject({
+      succeeded: 0,
+      errored: 1,
+      conflicted: 0,
+    });
     expect(first.current().action_request.execution.state).toBe("running");
     const firstKey = first.requests
       .find((request) => request.path.endsWith("/escalate"))
