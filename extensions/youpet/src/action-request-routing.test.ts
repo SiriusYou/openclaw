@@ -756,6 +756,7 @@ describe("YouPet ActionRequest dispatcher", () => {
     ["expired", "require_approval", undefined],
     ["not_required", "deny", undefined],
     ["approved", "require_approval", "2026-08-09T00:00:00Z"],
+    ["approved", "require_approval", "not-a-date"],
   ])("fails closed for approval=%s policy=%s", async (approval, policy, expiresAt) => {
     const envelope = createEnvelope({
       approvalState: approval,

@@ -896,7 +896,7 @@ function hasPolicyAuthorizationExpired(request: YouPetActionRequest, now: Date):
     return false;
   }
   const expiresAt = new Date(request.policy.expires_at);
-  return Number.isFinite(expiresAt.valueOf()) && expiresAt <= now;
+  return !Number.isFinite(expiresAt.valueOf()) || expiresAt <= now;
 }
 
 function buildExpiredAuthorizationRecoveryError(
