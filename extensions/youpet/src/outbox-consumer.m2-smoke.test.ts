@@ -882,14 +882,14 @@ WITH boundary AS (
         jsonb_set(
           requests.document,
           '{policy,expires_at}',
-          to_jsonb(boundary.expires_at::text),
+          to_jsonb(boundary.expires_at),
           true
         )
       WHEN requests.document ? 'action_request' THEN
         jsonb_set(
           requests.document,
           '{action_request,policy,expires_at}',
-          to_jsonb(boundary.expires_at::text),
+          to_jsonb(boundary.expires_at),
           true
         )
       ELSE requests.document
