@@ -393,8 +393,8 @@ export type YouPetActionRequestDispatchResult = {
 };
 
 const ACTION_REQUEST_PAGE_LIMIT = 200;
-// Defensive invariant only; normal dispatch is expected to paginate to exhaustion.
-const ACTION_REQUEST_PAGE_INVARIANT_LIMIT = 10_000;
+// Defensive invariant only; reset whenever pagination yields any unseen candidate.
+const ACTION_REQUEST_PAGE_NO_PROGRESS_LIMIT = 10_000;
 const EXECUTION_AUTHORIZATION_EXPIRED_CODE = "execution_authorization_expired";
 const EXECUTION_AUTHORIZATION_EXPIRED_MESSAGE =
   "cannot update execution after policy authorization expired";
@@ -442,37 +442,31 @@ export class YouPetActionRequestDispatcher {
       conflicted: 0,
       errored: 0,
     };
-    const candidates = new Map<string, YouPetActionRequestEnvelope>();
+    const seenCandidateIds = new Set<string>();
     for (const executionState of ["running", "queued", "not_started"] as const) {
       for (const approvalState of ["approved", "not_required"] as const) {
-        await this.collectCandidatePages({ approvalState, executionState }, candidates, result);
-      }
-    }
-
-    for (const candidate of candidates.values()) {
-      try {
-        await this.dispatchCandidate(candidate, result);
-      } catch (error) {
-        result.errored += 1;
-        this.logger?.error?.(
-          `[youpet] ActionRequest ${candidate.action_request.id} dispatch failed: ${summarizeDispatchError(error)}`,
+        await this.dispatchCandidatePages(
+          { approvalState, executionState },
+          seenCandidateIds,
+          result,
         );
       }
     }
     return result;
   }
 
-  private async collectCandidatePages(
+  private async dispatchCandidatePages(
     params: {
       approvalState: "approved" | "not_required";
       executionState: YouPetActionRequestExecutionState;
     },
-    candidates: Map<string, YouPetActionRequestEnvelope>,
+    seenCandidateIds: Set<string>,
     result: YouPetActionRequestDispatchResult,
   ): Promise<void> {
     let cursor: string | undefined;
     const seenCursors = new Set<string>();
-    for (let page = 0; page < ACTION_REQUEST_PAGE_INVARIANT_LIMIT; page += 1) {
+    let noProgressPages = 0;
+    for (;;) {
       const response = await this.client.list({
         tenantId: this.tenantId,
         approvalState: params.approvalState,
@@ -481,8 +475,22 @@ export class YouPetActionRequestDispatcher {
         ...(cursor ? { cursor } : {}),
       });
       result.listed += response.items.length;
+      let pageProgressed = false;
       for (const item of response.items) {
-        candidates.set(item.action_request.id, item);
+        if (seenCandidateIds.has(item.action_request.id)) {
+          continue;
+        }
+        seenCandidateIds.add(item.action_request.id);
+        pageProgressed = true;
+        await this.dispatchListedCandidate(item, result);
+      }
+      if (pageProgressed) {
+        noProgressPages = 0;
+      } else {
+        noProgressPages += 1;
+        if (noProgressPages > ACTION_REQUEST_PAGE_NO_PROGRESS_LIMIT) {
+          throw new Error("ActionRequest dispatch exceeded the pagination no-progress guard");
+        }
       }
       if (!response.nextCursor) {
         return;
@@ -493,7 +501,20 @@ export class YouPetActionRequestDispatcher {
       seenCursors.add(response.nextCursor);
       cursor = response.nextCursor;
     }
-    throw new Error("ActionRequest dispatch exceeded the pagination invariant guard");
+  }
+
+  private async dispatchListedCandidate(
+    candidate: YouPetActionRequestEnvelope,
+    result: YouPetActionRequestDispatchResult,
+  ): Promise<void> {
+    try {
+      await this.dispatchCandidate(candidate, result);
+    } catch (error) {
+      result.errored += 1;
+      this.logger?.error?.(
+        `[youpet] ActionRequest ${candidate.action_request.id} dispatch failed: ${summarizeDispatchError(error)}`,
+      );
+    }
   }
 
   private async dispatchCandidate(
@@ -518,7 +539,15 @@ export class YouPetActionRequestDispatcher {
 
     let current = initial;
     if (current.action_request.execution.state === "not_started") {
-      const queued = await this.tryTransition(current, "queued");
+      let queued: YouPetActionRequestEnvelope | undefined;
+      try {
+        queued = await this.tryTransition(current, "queued");
+      } catch (error) {
+        if (await this.handleExecutionAuthorizationExpiredDuringDispatch(current, error, result)) {
+          return;
+        }
+        throw error;
+      }
       if (!queued) {
         result.conflicted += 1;
         return;
@@ -529,7 +558,15 @@ export class YouPetActionRequestDispatcher {
       current.action_request.execution.state === "queued" ||
       current.action_request.execution.state === "running"
     ) {
-      const claimed = await this.tryClaim(current);
+      let claimed: YouPetActionRequestEnvelope | undefined;
+      try {
+        claimed = await this.tryClaim(current);
+      } catch (error) {
+        if (await this.handleExecutionAuthorizationExpiredDuringDispatch(current, error, result)) {
+          return;
+        }
+        throw error;
+      }
       if (!claimed) {
         result.conflicted += 1;
         return;
@@ -589,35 +626,49 @@ export class YouPetActionRequestDispatcher {
         tenantId: this.tenantId,
         actorId: this.actorId,
       }) ||
-      !hasPolicyAuthorizationExpired(current.action_request, now)
+      !hasRecoverablePolicyAuthorizationExpiry(current.action_request, now)
     ) {
       return false;
     }
 
-    const activeOwner = hasActiveExecutionClaim(
-      current,
-      current.execution_claim?.owner_id ?? "",
-      now,
-    )
-      ? (current.execution_claim?.owner_id ?? null)
-      : null;
-    if (activeOwner && activeOwner !== this.workerId) {
+    const recoveryMode = resolveExpiredRunningRecoveryMode(current, this.workerId, now);
+    if (recoveryMode.kind === "skip-active-owner") {
       this.logger?.warn?.(
-        `[youpet] Leaving expired running ActionRequest ${current.action_request.id} with active foreign owner ${activeOwner}`,
+        `[youpet] Leaving expired running ActionRequest ${current.action_request.id} with active foreign owner ${recoveryMode.ownerId}`,
       );
       result.skipped += 1;
+      return true;
+    }
+    if (recoveryMode.kind === "unrecoverable") {
+      result.conflicted += 1;
       return true;
     }
 
     const recovered = await this.tryExpiredAuthorizationRecovery(
       current,
-      activeOwner === this.workerId ? this.workerId : undefined,
+      recoveryMode.kind === "live-owner" ? this.workerId : undefined,
     );
     if (!recovered) {
       result.conflicted += 1;
       return true;
     }
     result.failed += 1;
+    return true;
+  }
+
+  private async handleExecutionAuthorizationExpiredDuringDispatch(
+    current: YouPetActionRequestEnvelope,
+    error: unknown,
+    result: YouPetActionRequestDispatchResult,
+  ): Promise<boolean> {
+    if (!isExecutionAuthorizationExpired(error)) {
+      return false;
+    }
+    const latest = await this.client.get(current.action_request.id);
+    if (await this.recoverExpiredRunningCandidate(latest, result)) {
+      return true;
+    }
+    result.conflicted += 1;
     return true;
   }
 
@@ -905,12 +956,27 @@ function isExpiredAuthorizationRecoveryConflict(error: unknown): boolean {
   );
 }
 
+function isExecutionAuthorizationExpired(error: unknown): boolean {
+  return (
+    error instanceof YouPetActionRequestCoreError &&
+    error.code === EXECUTION_AUTHORIZATION_EXPIRED_CODE
+  );
+}
+
 function hasPolicyAuthorizationExpired(request: YouPetActionRequest, now: Date): boolean {
   if (!request.policy.expires_at) {
     return false;
   }
   const expiresAt = new Date(request.policy.expires_at);
   return !Number.isFinite(expiresAt.valueOf()) || expiresAt <= now;
+}
+
+function hasRecoverablePolicyAuthorizationExpiry(request: YouPetActionRequest, now: Date): boolean {
+  if (!request.policy.expires_at) {
+    return false;
+  }
+  const expiresAt = new Date(request.policy.expires_at);
+  return Number.isFinite(expiresAt.valueOf()) && expiresAt <= now;
 }
 
 function buildExpiredAuthorizationRecoveryError(
@@ -923,6 +989,44 @@ function buildExpiredAuthorizationRecoveryError(
       ? { details: { policy_expires_at: request.policy.expires_at } }
       : {}),
   };
+}
+
+function resolveExpiredRunningRecoveryMode(
+  envelope: YouPetActionRequestEnvelope,
+  workerId: string,
+  now: Date,
+):
+  | { kind: "live-owner" }
+  | { kind: "workerless" }
+  | { kind: "skip-active-owner"; ownerId: string }
+  | { kind: "unrecoverable" } {
+  const claim = envelope.execution_claim;
+  if (!claim) {
+    return { kind: "workerless" };
+  }
+  const ownerId =
+    typeof claim.owner_id === "string" && claim.owner_id.length > 0 ? claim.owner_id : null;
+  const leaseExpiresAt =
+    typeof claim.lease_expires_at === "string" && claim.lease_expires_at.length > 0
+      ? claim.lease_expires_at
+      : null;
+  if (!ownerId && !leaseExpiresAt) {
+    return { kind: "workerless" };
+  }
+  if (!ownerId || !leaseExpiresAt) {
+    return { kind: "unrecoverable" };
+  }
+  const leaseExpiry = new Date(leaseExpiresAt);
+  if (!Number.isFinite(leaseExpiry.valueOf())) {
+    return { kind: "unrecoverable" };
+  }
+  if (leaseExpiry > now) {
+    if (ownerId === workerId) {
+      return { kind: "live-owner" };
+    }
+    return { kind: "skip-active-owner", ownerId };
+  }
+  return { kind: "workerless" };
 }
 
 function summarizeDispatchError(error: unknown): string {

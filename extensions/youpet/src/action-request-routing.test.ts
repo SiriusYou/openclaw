@@ -344,6 +344,63 @@ describe("YouPet ActionRequest dispatcher", () => {
     expect(executeMutation).toHaveBeenCalledOnce();
   });
 
+  it("streams past more than 10k unique pages without starving the later valid request", async () => {
+    const foreignPageCount = 10_005;
+    const valid = createEnvelope({ requestId: nthUuid(20_100) });
+    const core = new FakeActionRequestCore(valid);
+    const executeMutation = vi.fn(async () => ({
+      kind: "succeeded" as const,
+      result: { outcome_code: "task_escalated" },
+    }));
+    const dispatcher = new YouPetActionRequestDispatcher({
+      client: {
+        async list(params) {
+          if (params.approvalState !== "approved" || params.executionState !== "not_started") {
+            return { items: [], nextCursor: null };
+          }
+          const pageIndex = params.cursor ? Number(params.cursor.replace("cursor-", "")) : 0;
+          if (pageIndex < foreignPageCount) {
+            return {
+              items: [
+                createEnvelope({
+                  requestId: nthUuid(pageIndex + 1),
+                  proposerId: `foreign-agent-${pageIndex + 1}`,
+                }),
+              ],
+              nextCursor: `cursor-${pageIndex + 1}`,
+            };
+          }
+          return { items: [structuredClone(valid)], nextCursor: null };
+        },
+        async get(actionRequestId) {
+          return await core.get(actionRequestId);
+        },
+        async claimExecution(params) {
+          return await core.claimExecution(params);
+        },
+        async updateExecution(params) {
+          return await core.updateExecution(params);
+        },
+      },
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      workerId: "worker-a",
+      executeMutation,
+    });
+
+    const result = await dispatcher.dispatchOnce();
+
+    expect(result).toMatchObject({
+      listed: foreignPageCount + 1,
+      skipped: foreignPageCount,
+      claimed: 1,
+      succeeded: 1,
+      conflicted: 0,
+      errored: 0,
+    });
+    expect(executeMutation).toHaveBeenCalledOnce();
+  });
+
   it("fails the cycle when Core repeats next_cursor during pagination", async () => {
     const client = {
       async list() {
@@ -367,6 +424,41 @@ describe("YouPet ActionRequest dispatcher", () => {
     });
 
     await expect(dispatcher.dispatchOnce()).rejects.toThrow(/repeated next_cursor/u);
+  });
+
+  it("fails the cycle when Core advances cursors without any new candidate progress", async () => {
+    const duplicate = createEnvelope({
+      requestId: nthUuid(20_200),
+      proposerId: "foreign-agent-duplicate",
+    });
+    const dispatcher = new YouPetActionRequestDispatcher({
+      client: {
+        async list(params) {
+          if (params.approvalState !== "approved" || params.executionState !== "not_started") {
+            return { items: [], nextCursor: null };
+          }
+          const pageIndex = params.cursor ? Number(params.cursor.replace("cursor-", "")) : 0;
+          return {
+            items: [structuredClone(duplicate)],
+            nextCursor: `cursor-${pageIndex + 1}`,
+          };
+        },
+        async get() {
+          return createEnvelope();
+        },
+        async claimExecution() {
+          return createEnvelope();
+        },
+        async updateExecution() {
+          return createEnvelope();
+        },
+      },
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      executeMutation: async () => ({ kind: "retry" }),
+    });
+
+    await expect(dispatcher.dispatchOnce()).rejects.toThrow(/no-progress guard/u);
   });
 
   it("isolates one candidate error, logs a secret-safe summary, and still executes later candidates", async () => {
@@ -651,7 +743,7 @@ describe("YouPet ActionRequest dispatcher", () => {
     });
   });
 
-  it("sends the exact expired-authorization recovery payload, counts a conflict, and continues later candidates when the lease is expired", async () => {
+  it("sends the exact expired-authorization recovery payload, counts a failed recovery, and continues later candidates when the lease is expired", async () => {
     const currentNow = new Date("2026-08-10T01:10:00Z");
     const expired = createEnvelope({
       requestId: nthUuid(981),
@@ -685,10 +777,10 @@ describe("YouPet ActionRequest dispatcher", () => {
     const result = await dispatcher.dispatchOnce();
 
     expect(result).toMatchObject({
-      conflicted: 1,
+      conflicted: 0,
       claimed: 1,
       succeeded: 1,
-      failed: 0,
+      failed: 1,
       errored: 0,
     });
     expect(executeMutation).toHaveBeenCalledOnce();
@@ -705,6 +797,91 @@ describe("YouPet ActionRequest dispatcher", () => {
         },
       },
     });
+    expect(core.updateAttempts[0]?.update).not.toHaveProperty("worker_id");
+  });
+
+  it("treats an execution_authorization_expired claim race as a candidate conflict and still executes later candidates", async () => {
+    const currentNow = new Date("2026-08-10T01:10:00Z");
+    const raced = createEnvelope({
+      requestId: nthUuid(986),
+      executionState: "queued",
+      rowVersion: 2,
+      policyExpiresAt: "2026-08-10T01:15:00Z",
+    });
+    const expiredLatest = createEnvelope({
+      requestId: nthUuid(986),
+      executionState: "queued",
+      rowVersion: 2,
+      policyExpiresAt: "2026-08-10T01:05:00Z",
+    });
+    const valid = createEnvelope({ requestId: nthUuid(987) });
+    const validCore = new FakeActionRequestCore(valid, { now: () => currentNow });
+    const raceUpdates: YouPetActionRequestExecutionUpdate[] = [];
+    const executeMutation = vi.fn(async () => ({
+      kind: "succeeded" as const,
+      result: { outcome_code: "task_escalated" },
+    }));
+    const dispatcher = new YouPetActionRequestDispatcher({
+      client: {
+        async list(params) {
+          if (params.approvalState === "approved" && params.executionState === "queued") {
+            return { items: [structuredClone(raced)], nextCursor: null };
+          }
+          if (params.approvalState === "approved" && params.executionState === "not_started") {
+            return { items: [structuredClone(valid)], nextCursor: null };
+          }
+          return { items: [], nextCursor: null };
+        },
+        async get(actionRequestId) {
+          if (actionRequestId === raced.action_request.id) {
+            return structuredClone(expiredLatest);
+          }
+          return await validCore.get(actionRequestId);
+        },
+        async claimExecution(params) {
+          if (params.actionRequestId === raced.action_request.id) {
+            throw new YouPetActionRequestCoreError({
+              status: 409,
+              path: "/execution-claim",
+              code: "execution_authorization_expired",
+            });
+          }
+          return await validCore.claimExecution(params);
+        },
+        async updateExecution(params) {
+          if (params.actionRequestId === raced.action_request.id) {
+            raceUpdates.push(params.update);
+            return {
+              ...structuredClone(expiredLatest),
+              action_request: {
+                ...expiredLatest.action_request,
+                execution: { state: "failed" },
+              },
+              row_version: expiredLatest.row_version + 1,
+              execution_claim: null,
+            };
+          }
+          return await validCore.updateExecution(params);
+        },
+      },
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      workerId: "worker-a",
+      executeMutation,
+      now: () => currentNow,
+    });
+
+    const result = await dispatcher.dispatchOnce();
+
+    expect(result).toMatchObject({
+      failed: 0,
+      claimed: 1,
+      succeeded: 1,
+      conflicted: 1,
+      errored: 0,
+    });
+    expect(executeMutation).toHaveBeenCalledOnce();
+    expect(raceUpdates).toEqual([]);
   });
 
   it("leaves an expired running request alone when another worker still owns the active lease", async () => {
@@ -780,32 +957,35 @@ describe("YouPet ActionRequest dispatcher", () => {
   });
 
   it.each([
-    ["pending", "require_approval", undefined],
-    ["rejected", "require_approval", undefined],
-    ["expired", "require_approval", undefined],
-    ["not_required", "deny", undefined],
-    ["approved", "require_approval", "2026-08-09T00:00:00Z"],
-    ["approved", "require_approval", "not-a-date"],
-  ])("fails closed for approval=%s policy=%s", async (approval, policy, expiresAt) => {
-    const envelope = createEnvelope({
-      approvalState: approval,
-      policyOutcome: policy,
-      policyExpiresAt: expiresAt,
-    });
-    const core = new FakeActionRequestCore(envelope, { includeRegardlessOfFilters: true });
-    const executeMutation = vi.fn();
-    const dispatcher = new YouPetActionRequestDispatcher({
-      client: core,
-      tenantId: TENANT_ID,
-      actorId: ACTOR_ID,
-      executeMutation,
-      now: () => new Date("2026-08-10T00:00:00Z"),
-    });
+    ["pending", "require_approval", undefined, { skipped: 1, failed: 0 }, 0],
+    ["rejected", "require_approval", undefined, { skipped: 1, failed: 0 }, 0],
+    ["expired", "require_approval", undefined, { skipped: 1, failed: 0 }, 0],
+    ["not_required", "deny", undefined, { skipped: 1, failed: 0 }, 0],
+    ["approved", "require_approval", "2026-08-09T00:00:00Z", { skipped: 1, failed: 0 }, 0],
+    ["approved", "require_approval", "not-a-date", { skipped: 1, failed: 0 }, 0],
+  ])(
+    "fails closed for approval=%s policy=%s",
+    async (approval, policy, expiresAt, expected, expectedUpdateCount) => {
+      const envelope = createEnvelope({
+        approvalState: approval,
+        policyOutcome: policy,
+        policyExpiresAt: expiresAt,
+      });
+      const core = new FakeActionRequestCore(envelope, { includeRegardlessOfFilters: true });
+      const executeMutation = vi.fn();
+      const dispatcher = new YouPetActionRequestDispatcher({
+        client: core,
+        tenantId: TENANT_ID,
+        actorId: ACTOR_ID,
+        executeMutation,
+        now: () => new Date("2026-08-10T00:00:00Z"),
+      });
 
-    expect(await dispatcher.dispatchOnce()).toMatchObject({ skipped: 1, claimed: 0 });
-    expect(executeMutation).not.toHaveBeenCalled();
-    expect(core.updates).toEqual([]);
-  });
+      expect(await dispatcher.dispatchOnce()).toMatchObject({ ...expected, claimed: 0 });
+      expect(executeMutation).not.toHaveBeenCalled();
+      expect(core.updates).toHaveLength(expectedUpdateCount);
+    },
+  );
 
   it("rejects unmapped or foreign requests before execution", () => {
     const envelope = createEnvelope();
@@ -881,6 +1061,156 @@ describe("YouPet ActionRequest dispatcher", () => {
       }),
     ).toBeUndefined();
   });
+});
+
+describe("FakeActionRequestCore policy-expired recovery contract", () => {
+  it("permits workerless failed recovery when the running lease is expired", async () => {
+    const currentNow = new Date("2026-08-10T01:10:00Z");
+    const core = new FakeActionRequestCore(
+      createEnvelope({
+        requestId: nthUuid(20_300),
+        executionState: "running",
+        rowVersion: 4,
+        executionClaimOwnerId: "worker-a",
+        executionClaimLeaseExpiresAt: "2026-08-10T01:00:00Z",
+        policyExpiresAt: "2026-08-10T01:05:00Z",
+      }),
+      { now: () => currentNow },
+    );
+
+    await expect(
+      core.updateExecution({
+        update: {
+          state: "failed",
+          expected_row_version: 4,
+          error: {
+            code: "execution_authorization_expired",
+            message: "cannot update execution after policy authorization expired",
+            details: { policy_expires_at: "2026-08-10T01:05:00Z" },
+          },
+        },
+        idempotencyKey: "workerless-expired-lease",
+      }),
+    ).resolves.toMatchObject({
+      action_request: { execution: { state: "failed" } },
+      execution_claim: null,
+      row_version: 5,
+    });
+  });
+
+  it("permits workerless failed recovery for legacy both-null claim metadata", async () => {
+    const currentNow = new Date("2026-08-10T01:10:00Z");
+    const legacy = createEnvelope({
+      requestId: nthUuid(20_301),
+      executionState: "running",
+      rowVersion: 4,
+      policyExpiresAt: "2026-08-10T01:05:00Z",
+    });
+    legacy.execution_claim = {
+      owner_id: null,
+      lease_expires_at: null,
+    } as unknown as NonNullable<YouPetActionRequestEnvelope["execution_claim"]>;
+    const core = new FakeActionRequestCore(legacy, { now: () => currentNow });
+
+    await expect(
+      core.updateExecution({
+        update: {
+          state: "failed",
+          expected_row_version: 4,
+          error: {
+            code: "execution_authorization_expired",
+            message: "cannot update execution after policy authorization expired",
+            details: { policy_expires_at: "2026-08-10T01:05:00Z" },
+          },
+        },
+        idempotencyKey: "workerless-legacy-null",
+      }),
+    ).resolves.toMatchObject({
+      action_request: { execution: { state: "failed" } },
+      execution_claim: null,
+      row_version: 5,
+    });
+  });
+
+  it.each([
+    [undefined, "missing-policy-expiry"],
+    ["not-a-date", "malformed-policy-expiry"],
+    ["2026-08-10T01:15:00Z", "future-policy-expiry"],
+  ])(
+    "rejects workerless recovery when policy expiry is not recoverably expired (%s)",
+    async (policyExpiresAt, idempotencyKey) => {
+      const currentNow = new Date("2026-08-10T01:10:00Z");
+      const core = new FakeActionRequestCore(
+        createEnvelope({
+          requestId: nthUuid(20_304),
+          executionState: "running",
+          rowVersion: 4,
+          executionClaimOwnerId: "worker-a",
+          executionClaimLeaseExpiresAt: "2026-08-10T01:00:00Z",
+          policyExpiresAt,
+        }),
+        { now: () => currentNow },
+      );
+
+      await expect(
+        core.updateExecution({
+          update: {
+            state: "failed",
+            expected_row_version: 4,
+            error: {
+              code: "execution_authorization_expired",
+              details: { policy_expires_at: policyExpiresAt ?? "missing" },
+              message: "any message is ignored by the fake parity gate",
+            },
+          },
+          idempotencyKey,
+        }),
+      ).rejects.toMatchObject({
+        status: 409,
+        path: "/execution-status",
+        code: "execution_claim_required",
+      });
+    },
+  );
+
+  it.each([
+    [{ owner_id: "worker-a", lease_expires_at: null }, "owner-without-expiry"],
+    [{ owner_id: null, lease_expires_at: "2026-08-10T01:00:00Z" }, "expiry-without-owner"],
+  ])(
+    "fails closed for partial-null running claim metadata (%s)",
+    async (executionClaim, idempotencyKey) => {
+      const currentNow = new Date("2026-08-10T01:10:00Z");
+      const partial = createEnvelope({
+        requestId: nthUuid(20_302),
+        executionState: "running",
+        rowVersion: 4,
+        policyExpiresAt: "2026-08-10T01:05:00Z",
+      });
+      partial.execution_claim = executionClaim as unknown as NonNullable<
+        YouPetActionRequestEnvelope["execution_claim"]
+      >;
+      const core = new FakeActionRequestCore(partial, { now: () => currentNow });
+
+      await expect(
+        core.updateExecution({
+          update: {
+            state: "failed",
+            expected_row_version: 4,
+            error: {
+              code: "execution_authorization_expired",
+              message: "cannot update execution after policy authorization expired",
+              details: { policy_expires_at: "2026-08-10T01:05:00Z" },
+            },
+          },
+          idempotencyKey,
+        }),
+      ).rejects.toMatchObject({
+        status: 409,
+        path: "/execution-status",
+        code: "execution_claim_required",
+      });
+    },
+  );
 });
 
 function createEnvelope(
@@ -1052,8 +1382,43 @@ class FakeActionRequestCore {
       current.action_request.execution.state === "running" &&
       ["succeeded", "failed", "cancelled"].includes(params.update.state)
     ) {
-      const owner = current.execution_claim?.owner_id;
-      const leaseExpiresAt = current.execution_claim?.lease_expires_at;
+      const owner =
+        typeof current.execution_claim?.owner_id === "string" &&
+        current.execution_claim.owner_id.length > 0
+          ? current.execution_claim.owner_id
+          : null;
+      const leaseExpiresAt =
+        typeof current.execution_claim?.lease_expires_at === "string" &&
+        current.execution_claim.lease_expires_at.length > 0
+          ? current.execution_claim.lease_expires_at
+          : null;
+      const isExpiredAuthorizationRecovery =
+        !params.update.worker_id &&
+        (params.update.state === "failed" || params.update.state === "cancelled") &&
+        params.update.error?.code === "execution_authorization_expired" &&
+        hasRecoverableFakePolicyExpiry(current.action_request.policy.expires_at, this.now());
+      if (
+        isExpiredAuthorizationRecovery &&
+        ((!owner && !leaseExpiresAt) ||
+          (owner !== null &&
+            leaseExpiresAt !== null &&
+            Number.isFinite(new Date(leaseExpiresAt).valueOf()) &&
+            new Date(leaseExpiresAt) <= this.now()))
+      ) {
+        this.updates.push({ update: params.update, idempotencyKey: params.idempotencyKey });
+        const next = {
+          ...current,
+          action_request: {
+            ...current.action_request,
+            execution: { state: params.update.state },
+            updated_at: "2026-08-09T01:31:00Z",
+          },
+          execution_claim: null,
+          row_version: current.row_version + 1,
+        };
+        this.state.values.set(actionRequestId, next);
+        return structuredClone(next);
+      }
       if (!owner || !leaseExpiresAt || !params.update.worker_id) {
         throw new YouPetActionRequestCoreError({
           status: 409,
@@ -1183,4 +1548,12 @@ function collectFakeStateEnvelopes(
     }
   }
   return [...collected.values()];
+}
+
+function hasRecoverableFakePolicyExpiry(expiresAt: string | undefined, now: Date): boolean {
+  if (!expiresAt) {
+    return false;
+  }
+  const parsed = new Date(expiresAt);
+  return Number.isFinite(parsed.valueOf()) && parsed <= now;
 }
