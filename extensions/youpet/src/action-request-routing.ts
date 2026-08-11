@@ -808,25 +808,21 @@ export class YouPetActionRequestDispatcher {
     current: YouPetActionRequestEnvelope,
     workerId?: string,
   ): Promise<YouPetActionRequestEnvelope> {
-    try {
-      return await this.client.updateExecution({
-        actionRequestId: current.action_request.id,
-        update: {
-          state: "failed",
-          expected_row_version: current.row_version,
-          ...(workerId ? { worker_id: workerId } : {}),
-          error: buildExpiredAuthorizationRecoveryError(),
-        },
-        idempotencyKey: stableKey(
-          "execution-recovery",
-          current.action_request.id,
-          String(current.row_version),
-          workerId ?? "workerless",
-        ),
-      });
-    } catch (error) {
-      throw error;
-    }
+    return await this.client.updateExecution({
+      actionRequestId: current.action_request.id,
+      update: {
+        state: "failed",
+        expected_row_version: current.row_version,
+        ...(workerId ? { worker_id: workerId } : {}),
+        error: buildExpiredAuthorizationRecoveryError(),
+      },
+      idempotencyKey: stableKey(
+        "execution-recovery",
+        current.action_request.id,
+        String(current.row_version),
+        workerId ?? "workerless",
+      ),
+    });
   }
 }
 
