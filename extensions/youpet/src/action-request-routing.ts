@@ -394,7 +394,7 @@ export type YouPetActionRequestDispatchResult = {
 
 const ACTION_REQUEST_PAGE_LIMIT = 200;
 const ACTION_REQUEST_MAX_PAGES_PER_SLICE_PER_DISPATCH = 200;
-const ACTION_REQUEST_CURSOR_LOOP_GUARD = 64;
+const ACTION_REQUEST_PAGE_NO_PROGRESS_LIMIT = 64;
 const EXECUTION_AUTHORIZATION_EXPIRED_CODE = "execution_authorization_expired";
 const EXECUTION_AUTHORIZATION_EXPIRED_MESSAGE = "policy expired before execution completed";
 
@@ -464,10 +464,32 @@ export class YouPetActionRequestDispatcher {
     result: YouPetActionRequestDispatchResult,
   ): Promise<void> {
     const sliceKey = `${params.approvalState}:${params.executionState}`;
-    let cursor = this.sliceCursors.get(sliceKey);
-    const recentCursors: string[] = [];
+    const savedCursor = this.sliceCursors.get(sliceKey);
+    const seenSliceCandidateIds = new Set<string>();
+    const headPage = await this.client.list({
+      tenantId: this.tenantId,
+      approvalState: params.approvalState,
+      executionState: params.executionState,
+      limit: ACTION_REQUEST_PAGE_LIMIT,
+    });
+    result.listed += headPage.items.length;
+    await this.dispatchCandidatePageItems(
+      headPage.items,
+      processedCandidateIds,
+      seenSliceCandidateIds,
+      result,
+    );
+    if (!headPage.nextCursor) {
+      this.sliceCursors.delete(sliceKey);
+      return;
+    }
+
+    let cursor = savedCursor ?? headPage.nextCursor;
+    const seenBacklogCursors = new Set<string>([cursor]);
+    let noProgressPages = 0;
+    this.sliceCursors.set(sliceKey, cursor);
     for (
-      let pageCount = 0;
+      let pageCount = 1;
       pageCount < ACTION_REQUEST_MAX_PAGES_PER_SLICE_PER_DISPATCH;
       pageCount += 1
     ) {
@@ -476,30 +498,53 @@ export class YouPetActionRequestDispatcher {
         approvalState: params.approvalState,
         executionState: params.executionState,
         limit: ACTION_REQUEST_PAGE_LIMIT,
-        ...(cursor ? { cursor } : {}),
+        cursor,
       });
       result.listed += response.items.length;
-      for (const item of response.items) {
-        if (processedCandidateIds.has(item.action_request.id)) {
-          continue;
-        }
-        processedCandidateIds.add(item.action_request.id);
-        await this.dispatchListedCandidate(item, result);
-      }
+      const newSliceCandidateCount = await this.dispatchCandidatePageItems(
+        response.items,
+        processedCandidateIds,
+        seenSliceCandidateIds,
+        result,
+      );
       if (!response.nextCursor) {
         this.sliceCursors.delete(sliceKey);
         return;
       }
-      if (response.nextCursor === cursor || recentCursors.includes(response.nextCursor)) {
+      if (seenBacklogCursors.has(response.nextCursor)) {
         throw new Error("ActionRequest dispatch received a repeated next_cursor from Core");
       }
-      recentCursors.push(response.nextCursor);
-      if (recentCursors.length > ACTION_REQUEST_CURSOR_LOOP_GUARD) {
-        recentCursors.shift();
+      noProgressPages = newSliceCandidateCount === 0 ? noProgressPages + 1 : 0;
+      if (noProgressPages > ACTION_REQUEST_PAGE_NO_PROGRESS_LIMIT) {
+        throw new Error("ActionRequest dispatch exceeded the pagination no-progress guard");
       }
       cursor = response.nextCursor;
+      seenBacklogCursors.add(cursor);
+      this.sliceCursors.set(sliceKey, cursor);
     }
-    this.sliceCursors.set(sliceKey, cursor);
+  }
+
+  private async dispatchCandidatePageItems(
+    items: readonly YouPetActionRequestEnvelope[],
+    processedCandidateIds: Set<string>,
+    seenSliceCandidateIds: Set<string>,
+    result: YouPetActionRequestDispatchResult,
+  ): Promise<number> {
+    let newSliceCandidateCount = 0;
+    for (const item of items) {
+      const candidateId = item.action_request.id;
+      if (seenSliceCandidateIds.has(candidateId)) {
+        continue;
+      }
+      seenSliceCandidateIds.add(candidateId);
+      newSliceCandidateCount += 1;
+      if (processedCandidateIds.has(candidateId)) {
+        continue;
+      }
+      processedCandidateIds.add(candidateId);
+      await this.dispatchListedCandidate(item, result);
+    }
+    return newSliceCandidateCount;
   }
 
   private async dispatchListedCandidate(

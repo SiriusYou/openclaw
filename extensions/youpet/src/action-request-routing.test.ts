@@ -416,13 +416,13 @@ describe("YouPet ActionRequest dispatcher", () => {
     }
 
     expect(aggregate).toMatchObject({
-      listed: foreignPageCount + 1,
-      skipped: foreignPageCount,
       claimed: 1,
       succeeded: 1,
       conflicted: 0,
       errored: 0,
     });
+    expect(aggregate.listed).toBeGreaterThan(foreignPageCount);
+    expect(aggregate.skipped).toBe(aggregate.listed - 1);
     expect(executeMutation).toHaveBeenCalledOnce();
   });
 
@@ -451,27 +451,166 @@ describe("YouPet ActionRequest dispatcher", () => {
     await expect(dispatcher.dispatchOnce()).rejects.toThrow(/repeated next_cursor/u);
   });
 
-  it("resumes from the persisted slice cursor instead of restarting from page one every cycle", async () => {
-    const valid = createEnvelope({ requestId: nthUuid(20_200) });
-    let firstPageCalls = 0;
+  it("dispatches a newly arrived head request before continuing an older saved backlog", async () => {
+    const fresh = createEnvelope({ requestId: nthUuid(40_000) });
+    const freshCore = new FakeActionRequestCore(fresh);
+    let exposeFreshHead = false;
     const dispatcher = new YouPetActionRequestDispatcher({
       client: {
         async list(params) {
           if (params.approvalState !== "approved" || params.executionState !== "not_started") {
             return { items: [], nextCursor: null };
           }
-          if (!params.cursor) {
-            firstPageCalls += 1;
+          if (!params.cursor && exposeFreshHead) {
+            return { items: [structuredClone(fresh)], nextCursor: "cursor-1" };
           }
           const pageIndex = params.cursor ? Number(params.cursor.replace("cursor-", "")) : 0;
           if (pageIndex < 250) {
             return {
               items: [
                 createEnvelope({
-                  requestId: nthUuid(30_000 + pageIndex),
+                  requestId: nthUuid(40_100 + pageIndex),
                   proposerId: `foreign-agent-${pageIndex}`,
                 }),
               ],
+              nextCursor: `cursor-${pageIndex + 1}`,
+            };
+          }
+          return { items: [], nextCursor: null };
+        },
+        async get(actionRequestId) {
+          return await freshCore.get(actionRequestId);
+        },
+        async claimExecution(params) {
+          return await freshCore.claimExecution(params);
+        },
+        async updateExecution(params) {
+          return await freshCore.updateExecution(params);
+        },
+      },
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      executeMutation: async () => ({ kind: "succeeded" as const, result: { outcome_code: "ok" } }),
+    });
+
+    const first = await dispatcher.dispatchOnce();
+    exposeFreshHead = true;
+    const second = await dispatcher.dispatchOnce();
+
+    expect(first.succeeded).toBe(0);
+    expect(second.succeeded).toBe(1);
+  });
+
+  it("checkpoints each completed backlog page before a later list failure", async () => {
+    const valid = createEnvelope({ requestId: nthUuid(41_000) });
+    const validCore = new FakeActionRequestCore(valid);
+    let failCursorTwo = true;
+    const targetRequests: Array<string | undefined> = [];
+    const dispatcher = new YouPetActionRequestDispatcher({
+      client: {
+        async list(params) {
+          if (params.approvalState !== "approved" || params.executionState !== "not_started") {
+            return { items: [], nextCursor: null };
+          }
+          targetRequests.push(params.cursor);
+          if (!params.cursor) {
+            return {
+              items: [
+                createEnvelope({ requestId: nthUuid(41_100), proposerId: "foreign-agent-head" }),
+              ],
+              nextCursor: "cursor-1",
+            };
+          }
+          if (params.cursor === "cursor-1") {
+            return {
+              items: [
+                createEnvelope({ requestId: nthUuid(41_101), proposerId: "foreign-agent-one" }),
+              ],
+              nextCursor: "cursor-2",
+            };
+          }
+          if (failCursorTwo) {
+            failCursorTwo = false;
+            throw new Error("transient list failure");
+          }
+          return { items: [structuredClone(valid)], nextCursor: null };
+        },
+        async get(actionRequestId) {
+          return await validCore.get(actionRequestId);
+        },
+        async claimExecution(params) {
+          return await validCore.claimExecution(params);
+        },
+        async updateExecution(params) {
+          return await validCore.updateExecution(params);
+        },
+      },
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      executeMutation: async () => ({ kind: "succeeded" as const, result: { outcome_code: "ok" } }),
+    });
+
+    await expect(dispatcher.dispatchOnce()).rejects.toThrow("transient list failure");
+    const requestsBeforeRetry = targetRequests.length;
+    const retried = await dispatcher.dispatchOnce();
+
+    expect(targetRequests.slice(requestsBeforeRetry)).toEqual([undefined, "cursor-2"]);
+    expect(retried.succeeded).toBe(1);
+  });
+
+  it("fails bounded pagination when unique cursors repeat the same candidate frontier", async () => {
+    const duplicate = createEnvelope({
+      requestId: nthUuid(42_000),
+      proposerId: "foreign-agent-duplicate",
+    });
+    const dispatcher = new YouPetActionRequestDispatcher({
+      client: {
+        async list(params) {
+          if (params.approvalState !== "approved" || params.executionState !== "not_started") {
+            return { items: [], nextCursor: null };
+          }
+          const pageIndex = params.cursor ? Number(params.cursor.replace("cursor-", "")) : 0;
+          return {
+            items: [structuredClone(duplicate)],
+            nextCursor: `cursor-${pageIndex + 1}`,
+          };
+        },
+        async get() {
+          return createEnvelope();
+        },
+        async claimExecution() {
+          return createEnvelope();
+        },
+        async updateExecution() {
+          return createEnvelope();
+        },
+      },
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      executeMutation: async () => ({ kind: "retry" }),
+    });
+
+    await expect(dispatcher.dispatchOnce()).rejects.toThrow(/pagination no-progress guard/u);
+  });
+
+  it("bounds full-page backlog memory and resumes after the page budget", async () => {
+    const valid = createEnvelope({ requestId: nthUuid(43_000) });
+    const validCore = new FakeActionRequestCore(valid);
+    const dispatcher = new YouPetActionRequestDispatcher({
+      client: {
+        async list(params) {
+          if (params.approvalState !== "approved" || params.executionState !== "not_started") {
+            return { items: [], nextCursor: null };
+          }
+          const pageIndex = params.cursor ? Number(params.cursor.replace("cursor-", "")) : 0;
+          if (pageIndex < 200) {
+            return {
+              items: Array.from({ length: 200 }, (_, itemIndex) =>
+                createEnvelope({
+                  requestId: nthUuid(50_000 + pageIndex * 200 + itemIndex),
+                  proposerId: `foreign-agent-${pageIndex}-${itemIndex}`,
+                }),
+              ),
               nextCursor: `cursor-${pageIndex + 1}`,
             };
           }
@@ -491,14 +630,12 @@ describe("YouPet ActionRequest dispatcher", () => {
       actorId: ACTOR_ID,
       executeMutation: async () => ({ kind: "succeeded" as const, result: { outcome_code: "ok" } }),
     });
-    const validCore = new FakeActionRequestCore(valid);
 
     const first = await dispatcher.dispatchOnce();
     const second = await dispatcher.dispatchOnce();
 
-    expect(first.succeeded).toBe(0);
-    expect(second.succeeded).toBe(1);
-    expect(firstPageCalls).toBe(1);
+    expect(first).toMatchObject({ listed: 40_000, skipped: 40_000, succeeded: 0 });
+    expect(second).toMatchObject({ listed: 201, skipped: 200, succeeded: 1 });
   });
 
   it("isolates one candidate error, logs a secret-safe summary, and still executes later candidates", async () => {
@@ -916,6 +1053,76 @@ describe("YouPet ActionRequest dispatcher", () => {
     });
     expect(executeMutation).toHaveBeenCalledOnce();
     expect(raceUpdates).toEqual([]);
+  });
+
+  it("isolates execution_authorization_expired while queuing not_started and continues later candidates", async () => {
+    const currentNow = new Date("2026-08-10T01:10:00Z");
+    const raced = createEnvelope({
+      requestId: nthUuid(20_398),
+      executionState: "not_started",
+      rowVersion: 2,
+      policyExpiresAt: "2026-08-10T01:15:00Z",
+    });
+    const expiredLatest = createEnvelope({
+      requestId: nthUuid(20_398),
+      executionState: "not_started",
+      rowVersion: 2,
+      policyExpiresAt: "2026-08-10T01:05:00Z",
+    });
+    const valid = createEnvelope({ requestId: nthUuid(20_399) });
+    const validCore = new FakeActionRequestCore(valid, { now: () => currentNow });
+    const racedUpdates: YouPetActionRequestExecutionUpdate[] = [];
+    const executeMutation = vi.fn(async () => ({
+      kind: "succeeded" as const,
+      result: { outcome_code: "task_escalated" },
+    }));
+    const dispatcher = new YouPetActionRequestDispatcher({
+      client: {
+        async list(params) {
+          if (params.approvalState === "approved" && params.executionState === "not_started") {
+            return { items: [structuredClone(raced), structuredClone(valid)], nextCursor: null };
+          }
+          return { items: [], nextCursor: null };
+        },
+        async get(actionRequestId) {
+          if (actionRequestId === raced.action_request.id) {
+            return structuredClone(expiredLatest);
+          }
+          return await validCore.get(actionRequestId);
+        },
+        async claimExecution(params) {
+          return await validCore.claimExecution(params);
+        },
+        async updateExecution(params) {
+          if (params.actionRequestId === raced.action_request.id) {
+            racedUpdates.push(structuredClone(params.update));
+            throw new YouPetActionRequestCoreError({
+              status: 409,
+              path: "/execution-status",
+              code: "execution_authorization_expired",
+            });
+          }
+          return await validCore.updateExecution(params);
+        },
+      },
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      workerId: "worker-a",
+      executeMutation,
+      now: () => currentNow,
+    });
+
+    const result = await dispatcher.dispatchOnce();
+
+    expect(result).toMatchObject({
+      failed: 0,
+      claimed: 1,
+      succeeded: 1,
+      conflicted: 1,
+      errored: 0,
+    });
+    expect(racedUpdates).toEqual([{ state: "queued", expected_row_version: 2 }]);
+    expect(executeMutation).toHaveBeenCalledOnce();
   });
 
   it("treats a Core-expired running refetch as authoritative even when the worker clock is still behind policy expiry", async () => {
