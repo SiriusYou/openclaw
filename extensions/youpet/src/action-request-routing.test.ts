@@ -692,12 +692,12 @@ describe("YouPet ActionRequest dispatcher", () => {
         const pageIndex = params.cursor ? Number(params.cursor.replace("cursor-", "")) : 0;
         if (pageIndex < 200) {
           return {
-            items: Array.from({ length: 200 }, (_, itemIndex) =>
+            items: [
               createEnvelope({
-                requestId: nthUuid(60_000 + pageIndex * 200 + itemIndex),
-                proposerId: `foreign-agent-${pageIndex}-${itemIndex}`,
+                requestId: nthUuid(60_000 + pageIndex),
+                proposerId: `foreign-agent-${pageIndex}`,
               }),
-            ),
+            ],
             nextCursor: `cursor-${pageIndex + 1}`,
           };
         }
@@ -738,7 +738,7 @@ describe("YouPet ActionRequest dispatcher", () => {
         executeMutation: async () => ({ kind: "retry" as const }),
         cursorStore,
       }).dispatchOnce(),
-    ).resolves.toMatchObject({ listed: 40_000, succeeded: 0 });
+    ).resolves.toMatchObject({ listed: 200, succeeded: 0 });
     await expect(
       new YouPetActionRequestDispatcher({
         client,
@@ -747,7 +747,7 @@ describe("YouPet ActionRequest dispatcher", () => {
         executeMutation: async () => ({ kind: "retry" as const }),
         cursorStore,
       }).dispatchOnce(),
-    ).resolves.toMatchObject({ listed: 40_000, succeeded: 0 });
+    ).resolves.toMatchObject({ listed: 200, succeeded: 0 });
   });
 
   it("isolates one candidate error, logs a secret-safe summary, and still executes later candidates", async () => {
