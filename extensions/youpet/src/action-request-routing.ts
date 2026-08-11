@@ -742,12 +742,8 @@ export class YouPetActionRequestDispatcher {
     }
     if (ownerId === this.workerId && leaseExpiresAt !== null) {
       try {
-        const recovered = await this.performExpiredAuthorizationRecovery(current, this.workerId);
-        if (recovered) {
-          result.failed += 1;
-          return true;
-        }
-        result.conflicted += 1;
+        await this.performExpiredAuthorizationRecovery(current, this.workerId);
+        result.failed += 1;
         return true;
       } catch (error) {
         if (!isExpiredAuthorizationRecoveryWorkerlessFallback(error)) {
