@@ -692,11 +692,9 @@ describe("YouPet M2 OpenClaw flow live smoke", () => {
         },
       );
 
-      const forcedExpiry = new Date(Date.now() - 5 * 60_000).toISOString();
-      await forceActionRequestRecoveryBridge(
+      const forcedExpiry = await forceActionRequestRecoveryBridge(
         databaseUrl,
         taskEscalation.action_request.id,
-        forcedExpiry,
       );
 
       const recoveryRequests: RecordedRequest[] = [];
@@ -862,40 +860,68 @@ async function requestJson<T>(
 async function forceActionRequestRecoveryBridge(
   databaseUrl: string,
   actionRequestId: string,
-  expiresAt: string,
-): Promise<void> {
+): Promise<string> {
   const sql = `
-WITH updated AS (
-  UPDATE action_requests
+WITH boundary AS (
+  SELECT
+    id,
+    GREATEST(
+      COALESCE(
+        (document #>> '{policy,decided_at}')::timestamptz,
+        (document #>> '{action_request,policy,decided_at}')::timestamptz
+      ),
+      clock_timestamp()
+    ) AS expires_at
+  FROM action_requests
+  WHERE id = ${sqlStringLiteral(actionRequestId)}::uuid
+), updated AS (
+  UPDATE action_requests AS requests
   SET
     document = CASE
-      WHEN document ? 'policy' THEN
-        jsonb_set(document, '{policy,expires_at}', to_jsonb(${sqlStringLiteral(expiresAt)}::text), true)
-      WHEN document ? 'action_request' THEN
-        jsonb_set(document, '{action_request,policy,expires_at}', to_jsonb(${sqlStringLiteral(expiresAt)}::text), true)
-      ELSE document
+      WHEN requests.document ? 'policy' THEN
+        jsonb_set(
+          requests.document,
+          '{policy,expires_at}',
+          to_jsonb(boundary.expires_at::text),
+          true
+        )
+      WHEN requests.document ? 'action_request' THEN
+        jsonb_set(
+          requests.document,
+          '{action_request,policy,expires_at}',
+          to_jsonb(boundary.expires_at::text),
+          true
+        )
+      ELSE requests.document
     END,
     execution_owner_id = NULL,
     execution_lease_expires_at = NULL,
-    updated_at = timezone('utc', now())
-  WHERE id = ${sqlStringLiteral(actionRequestId)}::uuid
-  RETURNING id
+    updated_at = boundary.expires_at
+  FROM boundary
+  WHERE requests.id = boundary.id
+  RETURNING requests.id, requests.document
 )
-SELECT id FROM updated;
+SELECT CASE
+  WHEN document ? 'policy' THEN document #>> '{policy,expires_at}'
+  ELSE document #>> '{action_request,policy,expires_at}'
+END
+FROM updated;
 `.trim();
   const { stdout, stderr } = await execFileAsync(
     "psql",
-    [databaseUrl, "-X", "-v", "ON_ERROR_STOP=1", "-c", sql],
+    [databaseUrl, "-X", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-c", sql],
     {
       env: { ...process.env, PAGER: "cat" },
       maxBuffer: 1024 * 1024,
     },
   );
-  if (!stdout.includes(actionRequestId)) {
+  const expiresAt = stdout.trim();
+  if (!expiresAt) {
     throw new Error(
       `expected psql to expire ActionRequest ${actionRequestId}; stdout=${stdout} stderr=${stderr}`,
     );
   }
+  return expiresAt;
 }
 
 async function countActionRequestConsumerDeliveries(
