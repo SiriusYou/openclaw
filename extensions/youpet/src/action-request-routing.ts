@@ -521,6 +521,8 @@ export class YouPetActionRequestDispatcher {
       if (noProgressPages > ACTION_REQUEST_PAGE_NO_PROGRESS_LIMIT) {
         throw new Error("ActionRequest dispatch exceeded the pagination no-progress guard");
       }
+      // Advance only after every candidate on this page was handled. A crash may
+      // replay this page, but it must never make a later restart skip the page.
       cursor = response.nextCursor;
       seenBacklogCursors.add(cursor);
       this.saveSliceCursor(params, cursor);
