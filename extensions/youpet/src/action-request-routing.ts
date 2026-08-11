@@ -393,8 +393,8 @@ export type YouPetActionRequestDispatchResult = {
 };
 
 const ACTION_REQUEST_PAGE_LIMIT = 200;
-// Defensive invariant only; reset whenever pagination yields any unseen candidate.
-const ACTION_REQUEST_PAGE_NO_PROGRESS_LIMIT = 10_000;
+const ACTION_REQUEST_MAX_PAGES_PER_SLICE_PER_DISPATCH = 200;
+const ACTION_REQUEST_CURSOR_LOOP_GUARD = 64;
 const EXECUTION_AUTHORIZATION_EXPIRED_CODE = "execution_authorization_expired";
 const EXECUTION_AUTHORIZATION_EXPIRED_MESSAGE = "policy expired before execution completed";
 
@@ -409,6 +409,7 @@ export class YouPetActionRequestDispatcher {
   private readonly executeMutation: YouPetActionRequestMutationExecutor;
   private readonly logger: YouPetActionRequestLogger | undefined;
   private readonly now: () => Date;
+  private readonly sliceCursors = new Map<string, string | undefined>();
 
   constructor(params: {
     client: Pick<YouPetActionRequestClient, "claimExecution" | "get" | "list" | "updateExecution">;
@@ -441,12 +442,12 @@ export class YouPetActionRequestDispatcher {
       conflicted: 0,
       errored: 0,
     };
-    const seenCandidateIds = new Set<string>();
+    const processedCandidateIds = new Set<string>();
     for (const executionState of ["running", "queued", "not_started"] as const) {
       for (const approvalState of ["approved", "not_required"] as const) {
         await this.dispatchCandidatePages(
           { approvalState, executionState },
-          seenCandidateIds,
+          processedCandidateIds,
           result,
         );
       }
@@ -459,13 +460,17 @@ export class YouPetActionRequestDispatcher {
       approvalState: "approved" | "not_required";
       executionState: YouPetActionRequestExecutionState;
     },
-    seenCandidateIds: Set<string>,
+    processedCandidateIds: Set<string>,
     result: YouPetActionRequestDispatchResult,
   ): Promise<void> {
-    let cursor: string | undefined;
-    const seenCursors = new Set<string>();
-    let noProgressPages = 0;
-    for (;;) {
+    const sliceKey = `${params.approvalState}:${params.executionState}`;
+    let cursor = this.sliceCursors.get(sliceKey);
+    const recentCursors: string[] = [];
+    for (
+      let pageCount = 0;
+      pageCount < ACTION_REQUEST_MAX_PAGES_PER_SLICE_PER_DISPATCH;
+      pageCount += 1
+    ) {
       const response = await this.client.list({
         tenantId: this.tenantId,
         approvalState: params.approvalState,
@@ -474,32 +479,27 @@ export class YouPetActionRequestDispatcher {
         ...(cursor ? { cursor } : {}),
       });
       result.listed += response.items.length;
-      let pageProgressed = false;
       for (const item of response.items) {
-        if (seenCandidateIds.has(item.action_request.id)) {
+        if (processedCandidateIds.has(item.action_request.id)) {
           continue;
         }
-        seenCandidateIds.add(item.action_request.id);
-        pageProgressed = true;
+        processedCandidateIds.add(item.action_request.id);
         await this.dispatchListedCandidate(item, result);
       }
-      if (pageProgressed) {
-        noProgressPages = 0;
-      } else {
-        noProgressPages += 1;
-        if (noProgressPages > ACTION_REQUEST_PAGE_NO_PROGRESS_LIMIT) {
-          throw new Error("ActionRequest dispatch exceeded the pagination no-progress guard");
-        }
-      }
       if (!response.nextCursor) {
+        this.sliceCursors.delete(sliceKey);
         return;
       }
-      if (seenCursors.has(response.nextCursor)) {
+      if (response.nextCursor === cursor || recentCursors.includes(response.nextCursor)) {
         throw new Error("ActionRequest dispatch received a repeated next_cursor from Core");
       }
-      seenCursors.add(response.nextCursor);
+      recentCursors.push(response.nextCursor);
+      if (recentCursors.length > ACTION_REQUEST_CURSOR_LOOP_GUARD) {
+        recentCursors.shift();
+      }
       cursor = response.nextCursor;
     }
+    this.sliceCursors.set(sliceKey, cursor);
   }
 
   private async dispatchListedCandidate(
@@ -520,7 +520,7 @@ export class YouPetActionRequestDispatcher {
     initial: YouPetActionRequestEnvelope,
     result: YouPetActionRequestDispatchResult,
   ): Promise<void> {
-    if (await this.recoverExpiredRunningCandidate(initial, result)) {
+    if (await this.recoverExpiredRunningCandidate(initial, result, "local-observation")) {
       return;
     }
     const routeId = matchActionRequestRoute(initial, {
@@ -617,17 +617,26 @@ export class YouPetActionRequestDispatcher {
   private async recoverExpiredRunningCandidate(
     current: YouPetActionRequestEnvelope,
     result: YouPetActionRequestDispatchResult,
+    authority: "local-observation" | "core-expired",
   ): Promise<boolean> {
-    const now = this.now();
     if (
       current.action_request.execution.state !== "running" ||
       !matchActionRequestRouteInventory(current, {
         tenantId: this.tenantId,
         actorId: this.actorId,
-      }) ||
+      })
+    ) {
+      return false;
+    }
+    const now = this.now();
+    if (
+      authority === "local-observation" &&
       !hasRecoverablePolicyAuthorizationExpiry(current.action_request, now)
     ) {
       return false;
+    }
+    if (authority === "core-expired") {
+      return await this.recoverAuthoritativelyExpiredRunningCandidate(current, result);
     }
 
     const recoveryMode = resolveExpiredRunningRecoveryMode(current, this.workerId, now);
@@ -664,10 +673,61 @@ export class YouPetActionRequestDispatcher {
       return false;
     }
     const latest = await this.client.get(current.action_request.id);
-    if (await this.recoverExpiredRunningCandidate(latest, result)) {
+    if (await this.recoverExpiredRunningCandidate(latest, result, "core-expired")) {
       return true;
     }
     result.conflicted += 1;
+    return true;
+  }
+
+  private async recoverAuthoritativelyExpiredRunningCandidate(
+    current: YouPetActionRequestEnvelope,
+    result: YouPetActionRequestDispatchResult,
+  ): Promise<boolean> {
+    const claim = current.execution_claim;
+    const ownerId =
+      typeof claim?.owner_id === "string" && claim.owner_id.length > 0 ? claim.owner_id : null;
+    const leaseExpiresAt =
+      typeof claim?.lease_expires_at === "string" && claim.lease_expires_at.length > 0
+        ? claim.lease_expires_at
+        : null;
+    if ((ownerId === null) !== (leaseExpiresAt === null)) {
+      result.conflicted += 1;
+      return true;
+    }
+    if (ownerId === this.workerId && leaseExpiresAt !== null) {
+      try {
+        const recovered = await this.performExpiredAuthorizationRecovery(current, this.workerId);
+        if (recovered) {
+          result.failed += 1;
+          return true;
+        }
+        result.conflicted += 1;
+        return true;
+      } catch (error) {
+        if (!isExpiredAuthorizationRecoveryWorkerlessFallback(error)) {
+          if (isExpiredAuthorizationRecoveryConflict(error)) {
+            await this.client.get(current.action_request.id);
+            result.conflicted += 1;
+            return true;
+          }
+          throw error;
+        }
+      }
+    }
+    const workerless = await this.tryExpiredAuthorizationRecovery(current);
+    if (!workerless) {
+      if (ownerId === this.workerId && leaseExpiresAt !== null) {
+        const recovered = await this.tryExpiredAuthorizationRecovery(current, this.workerId);
+        if (recovered) {
+          result.failed += 1;
+          return true;
+        }
+      }
+      result.conflicted += 1;
+      return true;
+    }
+    result.failed += 1;
     return true;
   }
 
@@ -734,6 +794,21 @@ export class YouPetActionRequestDispatcher {
     workerId?: string,
   ): Promise<YouPetActionRequestEnvelope | undefined> {
     try {
+      return await this.performExpiredAuthorizationRecovery(current, workerId);
+    } catch (error) {
+      if (isExpiredAuthorizationRecoveryConflict(error)) {
+        await this.client.get(current.action_request.id);
+        return undefined;
+      }
+      throw error;
+    }
+  }
+
+  private async performExpiredAuthorizationRecovery(
+    current: YouPetActionRequestEnvelope,
+    workerId?: string,
+  ): Promise<YouPetActionRequestEnvelope> {
+    try {
       return await this.client.updateExecution({
         actionRequestId: current.action_request.id,
         update: {
@@ -746,13 +821,10 @@ export class YouPetActionRequestDispatcher {
           "execution-recovery",
           current.action_request.id,
           String(current.row_version),
+          workerId ?? "workerless",
         ),
       });
     } catch (error) {
-      if (isExpiredAuthorizationRecoveryConflict(error)) {
-        await this.client.get(current.action_request.id);
-        return undefined;
-      }
       throw error;
     }
   }
@@ -960,6 +1032,10 @@ function isExecutionAuthorizationExpired(error: unknown): boolean {
     error instanceof YouPetActionRequestCoreError &&
     error.code === EXECUTION_AUTHORIZATION_EXPIRED_CODE
   );
+}
+
+function isExpiredAuthorizationRecoveryWorkerlessFallback(error: unknown): boolean {
+  return error instanceof YouPetActionRequestCoreError && error.code === "invalid_execution_body";
 }
 
 function hasPolicyAuthorizationExpired(request: YouPetActionRequest, now: Date): boolean {

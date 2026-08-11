@@ -344,7 +344,7 @@ describe("YouPet ActionRequest dispatcher", () => {
     expect(executeMutation).toHaveBeenCalledOnce();
   });
 
-  it("streams past more than 10k unique pages without starving the later valid request", async () => {
+  it("streams page-bounded backlog scans across multiple dispatch cycles without starving the later valid request", async () => {
     const foreignPageCount = 10_005;
     const valid = createEnvelope({ requestId: nthUuid(20_100) });
     const core = new FakeActionRequestCore(valid);
@@ -388,9 +388,34 @@ describe("YouPet ActionRequest dispatcher", () => {
       executeMutation,
     });
 
-    const result = await dispatcher.dispatchOnce();
+    let aggregate = {
+      listed: 0,
+      skipped: 0,
+      claimed: 0,
+      succeeded: 0,
+      conflicted: 0,
+      errored: 0,
+      failed: 0,
+      retried: 0,
+    };
+    for (let cycle = 0; cycle < 60; cycle += 1) {
+      const result = await dispatcher.dispatchOnce();
+      aggregate = {
+        listed: aggregate.listed + result.listed,
+        skipped: aggregate.skipped + result.skipped,
+        claimed: aggregate.claimed + result.claimed,
+        succeeded: aggregate.succeeded + result.succeeded,
+        conflicted: aggregate.conflicted + result.conflicted,
+        errored: aggregate.errored + result.errored,
+        failed: aggregate.failed + result.failed,
+        retried: aggregate.retried + result.retried,
+      };
+      if (result.succeeded === 1) {
+        break;
+      }
+    }
 
-    expect(result).toMatchObject({
+    expect(aggregate).toMatchObject({
       listed: foreignPageCount + 1,
       skipped: foreignPageCount,
       claimed: 1,
@@ -426,39 +451,54 @@ describe("YouPet ActionRequest dispatcher", () => {
     await expect(dispatcher.dispatchOnce()).rejects.toThrow(/repeated next_cursor/u);
   });
 
-  it("fails the cycle when Core advances cursors without any new candidate progress", async () => {
-    const duplicate = createEnvelope({
-      requestId: nthUuid(20_200),
-      proposerId: "foreign-agent-duplicate",
-    });
+  it("resumes from the persisted slice cursor instead of restarting from page one every cycle", async () => {
+    const valid = createEnvelope({ requestId: nthUuid(20_200) });
+    let firstPageCalls = 0;
     const dispatcher = new YouPetActionRequestDispatcher({
       client: {
         async list(params) {
           if (params.approvalState !== "approved" || params.executionState !== "not_started") {
             return { items: [], nextCursor: null };
           }
+          if (!params.cursor) {
+            firstPageCalls += 1;
+          }
           const pageIndex = params.cursor ? Number(params.cursor.replace("cursor-", "")) : 0;
-          return {
-            items: [structuredClone(duplicate)],
-            nextCursor: `cursor-${pageIndex + 1}`,
-          };
+          if (pageIndex < 250) {
+            return {
+              items: [
+                createEnvelope({
+                  requestId: nthUuid(30_000 + pageIndex),
+                  proposerId: `foreign-agent-${pageIndex}`,
+                }),
+              ],
+              nextCursor: `cursor-${pageIndex + 1}`,
+            };
+          }
+          return { items: [structuredClone(valid)], nextCursor: null };
         },
-        async get() {
-          return createEnvelope();
+        async get(actionRequestId) {
+          return await validCore.get(actionRequestId);
         },
-        async claimExecution() {
-          return createEnvelope();
+        async claimExecution(params) {
+          return await validCore.claimExecution(params);
         },
-        async updateExecution() {
-          return createEnvelope();
+        async updateExecution(params) {
+          return await validCore.updateExecution(params);
         },
       },
       tenantId: TENANT_ID,
       actorId: ACTOR_ID,
-      executeMutation: async () => ({ kind: "retry" }),
+      executeMutation: async () => ({ kind: "succeeded" as const, result: { outcome_code: "ok" } }),
     });
+    const validCore = new FakeActionRequestCore(valid);
 
-    await expect(dispatcher.dispatchOnce()).rejects.toThrow(/no-progress guard/u);
+    const first = await dispatcher.dispatchOnce();
+    const second = await dispatcher.dispatchOnce();
+
+    expect(first.succeeded).toBe(0);
+    expect(second.succeeded).toBe(1);
+    expect(firstPageCalls).toBe(1);
   });
 
   it("isolates one candidate error, logs a secret-safe summary, and still executes later candidates", async () => {
@@ -878,6 +918,203 @@ describe("YouPet ActionRequest dispatcher", () => {
     expect(raceUpdates).toEqual([]);
   });
 
+  it("treats a Core-expired running refetch as authoritative even when the worker clock is still behind policy expiry", async () => {
+    const workerNow = new Date("2026-08-10T01:03:00Z");
+    const queued = createEnvelope({
+      requestId: nthUuid(20_400),
+      executionState: "queued",
+      rowVersion: 2,
+      policyExpiresAt: "2026-08-10T01:05:00Z",
+    });
+    const legacyRunningExpired = createEnvelope({
+      requestId: nthUuid(20_400),
+      executionState: "running",
+      rowVersion: 4,
+      policyExpiresAt: "2026-08-10T01:05:00Z",
+    });
+    const valid = createEnvelope({ requestId: nthUuid(20_401) });
+    const validCore = new FakeActionRequestCore(valid, { now: () => workerNow });
+    const executeMutation = vi.fn(async () => ({
+      kind: "succeeded" as const,
+      result: { outcome_code: "task_escalated" },
+    }));
+    const raceUpdates: YouPetActionRequestExecutionUpdate[] = [];
+    const dispatcher = new YouPetActionRequestDispatcher({
+      client: {
+        async list(params) {
+          if (params.approvalState === "approved" && params.executionState === "queued") {
+            return { items: [structuredClone(queued)], nextCursor: null };
+          }
+          if (params.approvalState === "approved" && params.executionState === "not_started") {
+            return { items: [structuredClone(valid)], nextCursor: null };
+          }
+          return { items: [], nextCursor: null };
+        },
+        async get(actionRequestId) {
+          if (actionRequestId === queued.action_request.id) {
+            return structuredClone(legacyRunningExpired);
+          }
+          return await validCore.get(actionRequestId);
+        },
+        async claimExecution(params) {
+          if (params.actionRequestId === queued.action_request.id) {
+            throw new YouPetActionRequestCoreError({
+              status: 409,
+              path: "/execution-claim",
+              code: "execution_authorization_expired",
+            });
+          }
+          return await validCore.claimExecution(params);
+        },
+        async updateExecution(params) {
+          if (params.actionRequestId === queued.action_request.id) {
+            raceUpdates.push(params.update);
+            return {
+              ...structuredClone(legacyRunningExpired),
+              action_request: {
+                ...legacyRunningExpired.action_request,
+                execution: { state: "failed" },
+              },
+              execution_claim: null,
+              row_version: legacyRunningExpired.row_version + 1,
+            };
+          }
+          return await validCore.updateExecution(params);
+        },
+      },
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      workerId: "worker-a",
+      executeMutation,
+      now: () => workerNow,
+    });
+
+    const result = await dispatcher.dispatchOnce();
+
+    expect(result).toMatchObject({
+      failed: 1,
+      claimed: 1,
+      succeeded: 1,
+      conflicted: 0,
+      errored: 0,
+    });
+    expect(raceUpdates).toEqual([
+      {
+        state: "failed",
+        expected_row_version: 4,
+        error: {
+          code: "execution_authorization_expired",
+          message: "policy expired before execution completed",
+        },
+      },
+    ]);
+    expect(executeMutation).toHaveBeenCalledOnce();
+  });
+
+  it("uses worker-owned authoritative recovery when Core still requires the active lease owner", async () => {
+    const workerNow = new Date("2026-08-10T01:03:00Z");
+    const queued = createEnvelope({
+      requestId: nthUuid(20_402),
+      executionState: "queued",
+      rowVersion: 2,
+      policyExpiresAt: "2026-08-10T01:05:00Z",
+    });
+    const latestRunning = createEnvelope({
+      requestId: nthUuid(20_402),
+      executionState: "running",
+      rowVersion: 4,
+      executionClaimOwnerId: "worker-a",
+      executionClaimLeaseExpiresAt: "2026-08-10T01:20:00Z",
+      policyExpiresAt: "2026-08-10T01:05:00Z",
+    });
+    const valid = createEnvelope({ requestId: nthUuid(20_403) });
+    const validCore = new FakeActionRequestCore(valid, { now: () => workerNow });
+    const recoveryAttempts: Array<{
+      update: YouPetActionRequestExecutionUpdate;
+      idempotencyKey: string;
+    }> = [];
+    const executeMutation = vi.fn(async () => ({
+      kind: "succeeded" as const,
+      result: { outcome_code: "task_escalated" },
+    }));
+    const dispatcher = new YouPetActionRequestDispatcher({
+      client: {
+        async list(params) {
+          if (params.approvalState === "approved" && params.executionState === "queued") {
+            return { items: [structuredClone(queued)], nextCursor: null };
+          }
+          if (params.approvalState === "approved" && params.executionState === "not_started") {
+            return { items: [structuredClone(valid)], nextCursor: null };
+          }
+          return { items: [], nextCursor: null };
+        },
+        async get(actionRequestId) {
+          if (actionRequestId === queued.action_request.id) {
+            return structuredClone(latestRunning);
+          }
+          return await validCore.get(actionRequestId);
+        },
+        async claimExecution(params) {
+          if (params.actionRequestId === queued.action_request.id) {
+            throw new YouPetActionRequestCoreError({
+              status: 409,
+              path: "/execution-claim",
+              code: "execution_authorization_expired",
+            });
+          }
+          return await validCore.claimExecution(params);
+        },
+        async updateExecution(params) {
+          if (params.actionRequestId === queued.action_request.id) {
+            recoveryAttempts.push({
+              update: structuredClone(params.update),
+              idempotencyKey: params.idempotencyKey,
+            });
+            expect(params.update.worker_id).toBe("worker-a");
+            return {
+              ...structuredClone(latestRunning),
+              action_request: {
+                ...latestRunning.action_request,
+                execution: { state: "failed" },
+              },
+              execution_claim: null,
+              row_version: latestRunning.row_version + 1,
+            };
+          }
+          return await validCore.updateExecution(params);
+        },
+      },
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      workerId: "worker-a",
+      executeMutation,
+      now: () => workerNow,
+    });
+
+    const result = await dispatcher.dispatchOnce();
+
+    expect(result.failed, JSON.stringify({ result, recoveryAttempts })).toBe(1);
+    expect(result).toMatchObject({
+      claimed: 1,
+      succeeded: 1,
+      conflicted: 0,
+      errored: 0,
+    });
+    expect(recoveryAttempts).toHaveLength(1);
+    expect(recoveryAttempts[0]).toMatchObject({
+      update: {
+        state: "failed",
+        expected_row_version: 4,
+        worker_id: "worker-a",
+        error: {
+          code: "execution_authorization_expired",
+          message: "policy expired before execution completed",
+        },
+      },
+    });
+    expect(executeMutation).toHaveBeenCalledOnce();
+  });
+
   it("leaves an expired running request alone when another worker still owns the active lease", async () => {
     const currentNow = new Date("2026-08-10T01:10:00Z");
     const foreignRunning = createEnvelope({
@@ -1164,6 +1401,40 @@ describe("FakeActionRequestCore policy-expired recovery contract", () => {
     },
   );
 
+  it("matches Core by rejecting workerless recovery bodies that carry a result payload", async () => {
+    const currentNow = new Date("2026-08-10T01:10:00Z");
+    const core = new FakeActionRequestCore(
+      createEnvelope({
+        requestId: nthUuid(20_305),
+        executionState: "running",
+        rowVersion: 4,
+        executionClaimOwnerId: "worker-a",
+        executionClaimLeaseExpiresAt: "2026-08-10T01:00:00Z",
+        policyExpiresAt: "2026-08-10T01:05:00Z",
+      }),
+      { now: () => currentNow },
+    );
+
+    await expect(
+      core.updateExecution({
+        update: {
+          state: "failed",
+          expected_row_version: 4,
+          result: { outcome_code: "must-not-exist" },
+          error: {
+            code: "execution_authorization_expired",
+            message: "policy expired before execution completed",
+          },
+        },
+        idempotencyKey: "workerless-expired-result",
+      }),
+    ).rejects.toMatchObject({
+      status: 409,
+      path: "/execution-status",
+      code: "invalid_execution_body",
+    });
+  });
+
   it.each([
     [{ owner_id: "worker-a", lease_expires_at: null }, "owner-without-expiry"],
     [{ owner_id: null, lease_expires_at: "2026-08-10T01:00:00Z" }, "expiry-without-owner"],
@@ -1395,6 +1666,13 @@ class FakeActionRequestCore {
             Number.isFinite(new Date(leaseExpiresAt).valueOf()) &&
             new Date(leaseExpiresAt) <= this.now()))
       ) {
+        if (params.update.result) {
+          throw new YouPetActionRequestCoreError({
+            status: 409,
+            path: "/execution-status",
+            code: "invalid_execution_body",
+          });
+        }
         this.updates.push({ update: params.update, idempotencyKey: params.idempotencyKey });
         const next = {
           ...current,
