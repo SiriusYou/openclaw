@@ -1093,8 +1093,8 @@ describe("YouPet ActionRequest dispatcher", () => {
 
     const result = await dispatcher.dispatchOnce();
 
-    expect(result.failed, JSON.stringify({ result, recoveryAttempts })).toBe(1);
     expect(result).toMatchObject({
+      failed: 1,
       claimed: 1,
       succeeded: 1,
       conflicted: 0,
