@@ -974,7 +974,7 @@ SELECT
     WHERE aggregate_type = 'action_request'
       AND aggregate_id = ${sqlStringLiteral(actionRequestId)}::uuid
       AND event_type = 'action_request.execution_updated'
-      AND payload->>'execution_state' = 'failed'
+      AND payload #>> '{payload,execution_state}' = 'failed'
   );
 `.trim();
   const { stdout } = await execFileAsync(
