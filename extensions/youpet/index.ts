@@ -1,4 +1,5 @@
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { openYouPetActionRequestCursorStore } from "./src/action-request-cursor-store.js";
 import { openYouPetFlowStore } from "./src/flow-store.js";
 import {
   createYouPetOutboxConsumerSettingsFromConfig,
@@ -14,6 +15,7 @@ const plugin = definePluginEntry({
   register(api: OpenClawPluginApi) {
     let consumer: YouPetOutboxConsumer | undefined;
     const flowStore = openYouPetFlowStore(api.runtime.state);
+    const actionRequestCursorStore = openYouPetActionRequestCursorStore(api.runtime.state);
 
     api.registerService({
       id: "youpet-outbox-consumer",
@@ -35,6 +37,7 @@ const plugin = definePluginEntry({
         consumer = new YouPetOutboxConsumer({
           ...settings,
           flowStore,
+          actionRequestCursorStore,
           logger: ctx.logger,
         });
         consumer.startPolling();

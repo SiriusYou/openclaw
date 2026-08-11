@@ -7,6 +7,13 @@ import type {
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateSyncKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
+  createYouPetActionRequestCursorStore,
+  YOUPET_ACTION_REQUEST_CURSOR_STORE_MAX_ENTRIES,
+  YOUPET_ACTION_REQUEST_CURSOR_STORE_NAMESPACE,
+  type YouPetActionRequestCursorRecord,
+  type YouPetActionRequestCursorStore,
+} from "../src/action-request-cursor-store.js";
+import {
   createYouPetFlowStore,
   YOUPET_FLOW_STORE_MAX_ENTRIES,
   YOUPET_FLOW_STORE_NAMESPACE,
@@ -21,13 +28,21 @@ const tempStateDirs: string[] = [];
 
 export type YouPetTestFlowStore = {
   flowStore: YouPetFlowStore;
+  actionRequestCursorStore: YouPetActionRequestCursorStore;
   flows: PluginStateSyncKeyedStore<YouPetFlowRecord>;
+  actionRequestCursors: PluginStateSyncKeyedStore<YouPetActionRequestCursorRecord>;
   processedEvents: PluginStateSyncKeyedStore<YouPetProcessedEventRecord>;
 };
 
 export function createYouPetTestFlowStore(
   env?: Record<string, string | undefined>,
 ): YouPetTestFlowStore {
+  const actionRequestCursors =
+    createPluginStateSyncKeyedStoreForTests<YouPetActionRequestCursorRecord>("youpet", {
+      namespace: YOUPET_ACTION_REQUEST_CURSOR_STORE_NAMESPACE,
+      maxEntries: YOUPET_ACTION_REQUEST_CURSOR_STORE_MAX_ENTRIES,
+      ...(env ? { env } : {}),
+    });
   const flows = createPluginStateSyncKeyedStoreForTests<YouPetFlowRecord>("youpet", {
     namespace: YOUPET_FLOW_STORE_NAMESPACE,
     maxEntries: YOUPET_FLOW_STORE_MAX_ENTRIES,
@@ -42,6 +57,8 @@ export function createYouPetTestFlowStore(
     },
   );
   return {
+    actionRequestCursorStore: createYouPetActionRequestCursorStore(actionRequestCursors),
+    actionRequestCursors,
     flowStore: createYouPetFlowStore({ flows, processedEvents }),
     flows,
     processedEvents,

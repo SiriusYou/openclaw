@@ -1,4 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
+import {
+  createPluginStateSyncKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  cleanupYouPetTempStateDirs,
+  createYouPetTestFlowStore,
+  createYouPetTempStateEnv,
+} from "../test/flow-store.fixture.js";
+import {
+  createYouPetActionRequestCursorStore,
+  YOUPET_ACTION_REQUEST_CURSOR_STORE_MAX_ENTRIES,
+  YOUPET_ACTION_REQUEST_CURSOR_STORE_NAMESPACE,
+} from "./action-request-cursor-store.js";
 import {
   buildYouPetActionRequestProposal,
   matchActionRequestRoute,
@@ -16,6 +30,11 @@ const TASK_ID = "00000000-0000-4000-8000-000000000201";
 const PLAN_ID = "00000000-0000-4000-8000-000000000301";
 const REQUEST_ID = "00000000-0000-4000-8000-000000000401";
 const ACTOR_ID = "openclaw-youpet-consumer";
+
+afterEach(async () => {
+  resetPluginStateStoreForTests();
+  await cleanupYouPetTempStateDirs();
+});
 
 describe("YouPet ActionRequest proposal routing", () => {
   it("builds one deterministic high-risk approval proposal for task escalation", () => {
@@ -352,41 +371,37 @@ describe("YouPet ActionRequest dispatcher", () => {
       kind: "succeeded" as const,
       result: { outcome_code: "task_escalated" },
     }));
-    const dispatcher = new YouPetActionRequestDispatcher({
-      client: {
-        async list(params) {
-          if (params.approvalState !== "approved" || params.executionState !== "not_started") {
-            return { items: [], nextCursor: null };
-          }
-          const pageIndex = params.cursor ? Number(params.cursor.replace("cursor-", "")) : 0;
-          if (pageIndex < foreignPageCount) {
-            return {
-              items: [
-                createEnvelope({
-                  requestId: nthUuid(pageIndex + 1),
-                  proposerId: `foreign-agent-${pageIndex + 1}`,
-                }),
-              ],
-              nextCursor: `cursor-${pageIndex + 1}`,
-            };
-          }
-          return { items: [structuredClone(valid)], nextCursor: null };
-        },
-        async get(actionRequestId) {
-          return await core.get(actionRequestId);
-        },
-        async claimExecution(params) {
-          return await core.claimExecution(params);
-        },
-        async updateExecution(params) {
-          return await core.updateExecution(params);
-        },
+    const env = createYouPetTempStateEnv();
+    const { actionRequestCursorStore } = createYouPetTestFlowStore(env);
+    const client = {
+      async list(params: { approvalState: string; executionState: string; cursor?: string }) {
+        if (params.approvalState !== "approved" || params.executionState !== "not_started") {
+          return { items: [], nextCursor: null };
+        }
+        const pageIndex = params.cursor ? Number(params.cursor.replace("cursor-", "")) : 0;
+        if (pageIndex < foreignPageCount) {
+          return {
+            items: [
+              createEnvelope({
+                requestId: nthUuid(pageIndex + 1),
+                proposerId: `foreign-agent-${pageIndex + 1}`,
+              }),
+            ],
+            nextCursor: `cursor-${pageIndex + 1}`,
+          };
+        }
+        return { items: [structuredClone(valid)], nextCursor: null };
       },
-      tenantId: TENANT_ID,
-      actorId: ACTOR_ID,
-      workerId: "worker-a",
-      executeMutation,
-    });
+      async get(actionRequestId: string) {
+        return await core.get(actionRequestId);
+      },
+      async claimExecution(params: Parameters<YouPetActionRequestClient["claimExecution"]>[0]) {
+        return await core.claimExecution(params);
+      },
+      async updateExecution(params: Parameters<YouPetActionRequestClient["updateExecution"]>[0]) {
+        return await core.updateExecution(params);
+      },
+    };
 
     let aggregate = {
       listed: 0,
@@ -399,6 +414,14 @@ describe("YouPet ActionRequest dispatcher", () => {
       retried: 0,
     };
     for (let cycle = 0; cycle < 60; cycle += 1) {
+      const dispatcher = new YouPetActionRequestDispatcher({
+        client,
+        tenantId: TENANT_ID,
+        actorId: ACTOR_ID,
+        workerId: "worker-a",
+        executeMutation,
+        cursorStore: actionRequestCursorStore,
+      });
       const result = await dispatcher.dispatchOnce();
       aggregate = {
         listed: aggregate.listed + result.listed,
@@ -596,46 +619,135 @@ describe("YouPet ActionRequest dispatcher", () => {
   it("bounds full-page backlog memory and resumes after the page budget", async () => {
     const valid = createEnvelope({ requestId: nthUuid(43_000) });
     const validCore = new FakeActionRequestCore(valid);
-    const dispatcher = new YouPetActionRequestDispatcher({
-      client: {
-        async list(params) {
-          if (params.approvalState !== "approved" || params.executionState !== "not_started") {
-            return { items: [], nextCursor: null };
-          }
-          const pageIndex = params.cursor ? Number(params.cursor.replace("cursor-", "")) : 0;
-          if (pageIndex < 200) {
-            return {
-              items: Array.from({ length: 200 }, (_, itemIndex) =>
-                createEnvelope({
-                  requestId: nthUuid(50_000 + pageIndex * 200 + itemIndex),
-                  proposerId: `foreign-agent-${pageIndex}-${itemIndex}`,
-                }),
-              ),
-              nextCursor: `cursor-${pageIndex + 1}`,
-            };
-          }
-          return { items: [structuredClone(valid)], nextCursor: null };
-        },
-        async get(actionRequestId) {
-          return await validCore.get(actionRequestId);
-        },
-        async claimExecution(params) {
-          return await validCore.claimExecution(params);
-        },
-        async updateExecution(params) {
-          return await validCore.updateExecution(params);
-        },
+    const env = createYouPetTempStateEnv();
+    const cursorStore = createTestCursorStore(env);
+    const client = {
+      async list(params: { approvalState: string; executionState: string; cursor?: string }) {
+        if (params.approvalState !== "approved" || params.executionState !== "not_started") {
+          return { items: [], nextCursor: null };
+        }
+        const pageIndex = params.cursor ? Number(params.cursor.replace("cursor-", "")) : 0;
+        if (pageIndex < 200) {
+          return {
+            items: Array.from({ length: 200 }, (_, itemIndex) =>
+              createEnvelope({
+                requestId: nthUuid(50_000 + pageIndex * 200 + itemIndex),
+                proposerId: `foreign-agent-${pageIndex}-${itemIndex}`,
+              }),
+            ),
+            nextCursor: `cursor-${pageIndex + 1}`,
+          };
+        }
+        return { items: [structuredClone(valid)], nextCursor: null };
       },
+      async get(actionRequestId: string) {
+        return await validCore.get(actionRequestId);
+      },
+      async claimExecution(params: {
+        actionRequestId?: string;
+        claim: { worker_id: string; expected_row_version: number };
+        idempotencyKey: string;
+      }) {
+        return await validCore.claimExecution(params);
+      },
+      async updateExecution(params: {
+        actionRequestId?: string;
+        update: YouPetActionRequestExecutionUpdate;
+        idempotencyKey: string;
+      }) {
+        return await validCore.updateExecution(params);
+      },
+    };
+    const dispatcher = new YouPetActionRequestDispatcher({
+      client,
       tenantId: TENANT_ID,
       actorId: ACTOR_ID,
       executeMutation: async () => ({ kind: "succeeded" as const, result: { outcome_code: "ok" } }),
+      cursorStore,
     });
 
     const first = await dispatcher.dispatchOnce();
-    const second = await dispatcher.dispatchOnce();
+    const second = await new YouPetActionRequestDispatcher({
+      client,
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      executeMutation: async () => ({ kind: "succeeded" as const, result: { outcome_code: "ok" } }),
+      cursorStore,
+    }).dispatchOnce();
 
     expect(first).toMatchObject({ listed: 40_000, skipped: 40_000, succeeded: 0 });
     expect(second).toMatchObject({ listed: 201, skipped: 200, succeeded: 1 });
+  });
+
+  it("does not reuse a persisted backlog cursor across tenant or actor boundaries", async () => {
+    const env = createYouPetTempStateEnv();
+    const cursorStore = createTestCursorStore(env);
+    const valid = createEnvelope({ requestId: nthUuid(43_001) });
+    const validCore = new FakeActionRequestCore(valid);
+    const client = {
+      async list(params: { approvalState: string; executionState: string; cursor?: string }) {
+        if (params.approvalState !== "approved" || params.executionState !== "not_started") {
+          return { items: [], nextCursor: null };
+        }
+        const pageIndex = params.cursor ? Number(params.cursor.replace("cursor-", "")) : 0;
+        if (pageIndex < 200) {
+          return {
+            items: Array.from({ length: 200 }, (_, itemIndex) =>
+              createEnvelope({
+                requestId: nthUuid(60_000 + pageIndex * 200 + itemIndex),
+                proposerId: `foreign-agent-${pageIndex}-${itemIndex}`,
+              }),
+            ),
+            nextCursor: `cursor-${pageIndex + 1}`,
+          };
+        }
+        return { items: [structuredClone(valid)], nextCursor: null };
+      },
+      async get(actionRequestId: string) {
+        return await validCore.get(actionRequestId);
+      },
+      async claimExecution(params: {
+        actionRequestId?: string;
+        claim: { worker_id: string; expected_row_version: number };
+        idempotencyKey: string;
+      }) {
+        return await validCore.claimExecution(params);
+      },
+      async updateExecution(params: {
+        actionRequestId?: string;
+        update: YouPetActionRequestExecutionUpdate;
+        idempotencyKey: string;
+      }) {
+        return await validCore.updateExecution(params);
+      },
+    };
+
+    await new YouPetActionRequestDispatcher({
+      client,
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      executeMutation: async () => ({ kind: "retry" as const }),
+      cursorStore,
+    }).dispatchOnce();
+
+    await expect(
+      new YouPetActionRequestDispatcher({
+        client,
+        tenantId: "00000000-0000-4000-8000-000000000199",
+        actorId: ACTOR_ID,
+        executeMutation: async () => ({ kind: "retry" as const }),
+        cursorStore,
+      }).dispatchOnce(),
+    ).resolves.toMatchObject({ listed: 40_000, succeeded: 0 });
+    await expect(
+      new YouPetActionRequestDispatcher({
+        client,
+        tenantId: TENANT_ID,
+        actorId: "openclaw-different-consumer",
+        executeMutation: async () => ({ kind: "retry" as const }),
+        cursorStore,
+      }).dispatchOnce(),
+    ).resolves.toMatchObject({ listed: 40_000, succeeded: 0 });
   });
 
   it("isolates one candidate error, logs a secret-safe summary, and still executes later candidates", async () => {
@@ -1322,6 +1434,133 @@ describe("YouPet ActionRequest dispatcher", () => {
     expect(executeMutation).toHaveBeenCalledOnce();
   });
 
+  it("falls back from an invalid worker-owned expired recovery body to a workerless recovery", async () => {
+    const workerNow = new Date("2026-08-10T01:21:00Z");
+    const queued = createEnvelope({
+      requestId: nthUuid(20_404),
+      executionState: "queued",
+      rowVersion: 2,
+      policyExpiresAt: "2026-08-10T01:25:00Z",
+    });
+    const latestRunning = createEnvelope({
+      requestId: nthUuid(20_404),
+      executionState: "running",
+      rowVersion: 4,
+      executionClaimOwnerId: "worker-a",
+      executionClaimLeaseExpiresAt: "2026-08-10T01:20:00Z",
+      policyExpiresAt: "2026-08-10T01:05:00Z",
+    });
+    const valid = createEnvelope({ requestId: nthUuid(20_405) });
+    const validCore = new FakeActionRequestCore(valid, { now: () => workerNow });
+    let queuedRecoveryAttempt = 0;
+    const recoveryAttempts: Array<{
+      update: YouPetActionRequestExecutionUpdate;
+      idempotencyKey: string;
+    }> = [];
+    const executeMutation = vi.fn(async () => ({
+      kind: "succeeded" as const,
+      result: { outcome_code: "task_escalated" },
+    }));
+    const dispatcher = new YouPetActionRequestDispatcher({
+      client: {
+        async list(params) {
+          if (params.approvalState === "approved" && params.executionState === "queued") {
+            return { items: [structuredClone(queued)], nextCursor: null };
+          }
+          if (params.approvalState === "approved" && params.executionState === "not_started") {
+            return { items: [structuredClone(valid)], nextCursor: null };
+          }
+          return { items: [], nextCursor: null };
+        },
+        async get(actionRequestId) {
+          if (actionRequestId === queued.action_request.id) {
+            return structuredClone(latestRunning);
+          }
+          return await validCore.get(actionRequestId);
+        },
+        async claimExecution(params) {
+          if (params.actionRequestId === queued.action_request.id) {
+            throw new YouPetActionRequestCoreError({
+              status: 409,
+              path: "/execution-claim",
+              code: "execution_authorization_expired",
+            });
+          }
+          return await validCore.claimExecution(params);
+        },
+        async updateExecution(params) {
+          if (params.actionRequestId === queued.action_request.id) {
+            queuedRecoveryAttempt += 1;
+            recoveryAttempts.push({
+              update: structuredClone(params.update),
+              idempotencyKey: params.idempotencyKey,
+            });
+            if (queuedRecoveryAttempt === 1) {
+              throw new YouPetActionRequestCoreError({
+                status: 409,
+                path: "/execution-status",
+                code: "invalid_execution_body",
+              });
+            }
+            return {
+              ...structuredClone(latestRunning),
+              action_request: {
+                ...latestRunning.action_request,
+                execution: { state: "failed" },
+              },
+              execution_claim: null,
+              row_version: latestRunning.row_version + 1,
+            };
+          }
+          return await validCore.updateExecution(params);
+        },
+      },
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      workerId: "worker-a",
+      executeMutation,
+      now: () => workerNow,
+    });
+
+    const result = await dispatcher.dispatchOnce();
+
+    expect(result).toMatchObject({
+      failed: 1,
+      claimed: 1,
+      succeeded: 1,
+      conflicted: 0,
+      errored: 0,
+    });
+    expect(recoveryAttempts).toHaveLength(2);
+    expect(recoveryAttempts[0]).toMatchObject({
+      update: {
+        state: "failed",
+        expected_row_version: 4,
+        worker_id: "worker-a",
+        error: {
+          code: "execution_authorization_expired",
+          message: "policy expired before execution completed",
+        },
+      },
+    });
+    expect(recoveryAttempts[1]).toMatchObject({
+      update: {
+        state: "failed",
+        expected_row_version: 4,
+        error: {
+          code: "execution_authorization_expired",
+          message: "policy expired before execution completed",
+        },
+      },
+    });
+    expect(recoveryAttempts[0]?.idempotencyKey).not.toBe(recoveryAttempts[1]?.idempotencyKey);
+    expect(recoveryAttempts[1]?.update).not.toHaveProperty("worker_id");
+    expect(executeMutation).toHaveBeenCalledOnce();
+    expect(executeMutation.mock.calls[0]?.[0]?.envelope.action_request.id).toBe(
+      valid.action_request.id,
+    );
+  });
+
   it("leaves an expired running request alone when another worker still owns the active lease", async () => {
     const currentNow = new Date("2026-08-10T01:10:00Z");
     const foreignRunning = createEnvelope({
@@ -1642,6 +1881,40 @@ describe("FakeActionRequestCore policy-expired recovery contract", () => {
     });
   });
 
+  it("matches Core by forcing expired worker-owned recovery bodies to retry workerless", async () => {
+    const currentNow = new Date("2026-08-10T01:10:00Z");
+    const core = new FakeActionRequestCore(
+      createEnvelope({
+        requestId: nthUuid(20_306),
+        executionState: "running",
+        rowVersion: 4,
+        executionClaimOwnerId: "worker-a",
+        executionClaimLeaseExpiresAt: "2026-08-10T01:00:00Z",
+        policyExpiresAt: "2026-08-10T01:05:00Z",
+      }),
+      { now: () => currentNow },
+    );
+
+    await expect(
+      core.updateExecution({
+        update: {
+          state: "failed",
+          expected_row_version: 4,
+          worker_id: "worker-a",
+          error: {
+            code: "execution_authorization_expired",
+            message: "policy expired before execution completed",
+          },
+        },
+        idempotencyKey: "owned-expired-recovery",
+      }),
+    ).rejects.toMatchObject({
+      status: 409,
+      path: "/execution-status",
+      code: "invalid_execution_body",
+    });
+  });
+
   it.each([
     [{ owner_id: "worker-a", lease_expires_at: null }, "owner-without-expiry"],
     [{ owner_id: null, lease_expires_at: "2026-08-10T01:00:00Z" }, "expiry-without-owner"],
@@ -1861,18 +2134,28 @@ class FakeActionRequestCore {
           ? current.execution_claim.lease_expires_at
           : null;
       const isExpiredAuthorizationRecovery =
-        !params.update.worker_id &&
         (params.update.state === "failed" || params.update.state === "cancelled") &&
         params.update.error?.code === "execution_authorization_expired" &&
         hasRecoverableFakePolicyExpiry(current.action_request.policy.expires_at, this.now());
-      if (
-        isExpiredAuthorizationRecovery &&
-        ((!owner && !leaseExpiresAt) ||
-          (owner !== null &&
-            leaseExpiresAt !== null &&
-            Number.isFinite(new Date(leaseExpiresAt).valueOf()) &&
-            new Date(leaseExpiresAt) <= this.now()))
-      ) {
+      const hasExpiredOrLegacyLease =
+        (!owner && !leaseExpiresAt) ||
+        (owner !== null &&
+          leaseExpiresAt !== null &&
+          Number.isFinite(new Date(leaseExpiresAt).valueOf()) &&
+          new Date(leaseExpiresAt) <= this.now());
+      const hasLiveOwnedLease =
+        owner !== null &&
+        leaseExpiresAt !== null &&
+        params.update.worker_id === owner &&
+        new Date(leaseExpiresAt) > this.now();
+      if (isExpiredAuthorizationRecovery && params.update.worker_id && hasExpiredOrLegacyLease) {
+        throw new YouPetActionRequestCoreError({
+          status: 409,
+          path: "/execution-status",
+          code: "invalid_execution_body",
+        });
+      }
+      if (isExpiredAuthorizationRecovery && !params.update.worker_id && hasExpiredOrLegacyLease) {
         if (params.update.result) {
           throw new YouPetActionRequestCoreError({
             status: 409,
@@ -1880,6 +2163,21 @@ class FakeActionRequestCore {
             code: "invalid_execution_body",
           });
         }
+        this.updates.push({ update: params.update, idempotencyKey: params.idempotencyKey });
+        const next = {
+          ...current,
+          action_request: {
+            ...current.action_request,
+            execution: { state: params.update.state },
+            updated_at: "2026-08-09T01:31:00Z",
+          },
+          execution_claim: null,
+          row_version: current.row_version + 1,
+        };
+        this.state.values.set(actionRequestId, next);
+        return structuredClone(next);
+      }
+      if (isExpiredAuthorizationRecovery && hasLiveOwnedLease) {
         this.updates.push({ update: params.update, idempotencyKey: params.idempotencyKey });
         const next = {
           ...current,
@@ -2031,4 +2329,14 @@ function hasRecoverableFakePolicyExpiry(expiresAt: string | undefined, now: Date
   }
   const parsed = new Date(expiresAt);
   return Number.isFinite(parsed.valueOf()) && parsed <= now;
+}
+
+function createTestCursorStore(env: Record<string, string | undefined>) {
+  return createYouPetActionRequestCursorStore(
+    createPluginStateSyncKeyedStoreForTests("youpet", {
+      namespace: YOUPET_ACTION_REQUEST_CURSOR_STORE_NAMESPACE,
+      maxEntries: YOUPET_ACTION_REQUEST_CURSOR_STORE_MAX_ENTRIES,
+      env,
+    }),
+  );
 }

@@ -1,3 +1,4 @@
+import type { YouPetActionRequestCursorStore } from "./action-request-cursor-store.js";
 import {
   buildYouPetActionRequestProposal,
   YouPetActionRequestClient,
@@ -114,6 +115,7 @@ export interface YouPetOutboxConsumerSettings {
   escalateMissedTasks?: boolean;
   manageFlows?: boolean;
   flowStore?: YouPetFlowStore;
+  actionRequestCursorStore?: YouPetActionRequestCursorStore;
   fetchFn?: YouPetOutboxFetch;
   logger?: YouPetOutboxConsumerLogger;
   handlers?: Partial<Record<YouPetOpenClawEventType, YouPetOutboxEventHandler>>;
@@ -136,6 +138,7 @@ export interface ResolvedYouPetOutboxConsumerSettings extends Required<
   >
 > {
   flowStore?: YouPetFlowStore;
+  actionRequestCursorStore?: YouPetActionRequestCursorStore;
   fetchFn?: YouPetOutboxFetch;
   logger?: YouPetOutboxConsumerLogger;
   handlers?: Partial<Record<YouPetOpenClawEventType, YouPetOutboxEventHandler>>;
@@ -186,6 +189,7 @@ export class YouPetOutboxConsumer {
       escalateMissedTasks: settings.escalateMissedTasks ?? true,
       manageFlows: settings.manageFlows ?? true,
       flowStore: settings.flowStore,
+      actionRequestCursorStore: settings.actionRequestCursorStore,
       fetchFn,
       logger: settings.logger,
       handlers: settings.handlers,
@@ -204,6 +208,7 @@ export class YouPetOutboxConsumer {
           workerId: settings.workerId,
           executeMutation: async (params) => await this.executeActionRequestMutation(params),
           logger: this.settings.logger,
+          cursorStore: this.settings.actionRequestCursorStore,
         })
       : undefined;
   }

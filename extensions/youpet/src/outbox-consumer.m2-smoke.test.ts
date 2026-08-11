@@ -275,7 +275,7 @@ describe("YouPet M2 OpenClaw flow live smoke", () => {
       checkin_count: 0,
     });
     expect(activatedFlow?.flow_id).toBeTypeOf("string");
-    expect(openSyncKeyedStore).toHaveBeenCalledTimes(2);
+    expect(openSyncKeyedStore).toHaveBeenCalledTimes(3);
     expect(nackRequests(recordedRequests)).toHaveLength(0);
     expect(failedAckRequests(recordedRequests)).toHaveLength(0);
     expect(successfulAckRequests(recordedRequests)).toHaveLength(1);

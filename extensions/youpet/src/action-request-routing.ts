@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import type { YouPetActionRequestCursorStore } from "./action-request-cursor-store.js";
 
 export type YouPetActionRequestFetch = (
   input: string | URL | Request,
@@ -409,6 +410,7 @@ export class YouPetActionRequestDispatcher {
   private readonly executeMutation: YouPetActionRequestMutationExecutor;
   private readonly logger: YouPetActionRequestLogger | undefined;
   private readonly now: () => Date;
+  private readonly cursorStore: YouPetActionRequestCursorStore | undefined;
   private readonly sliceCursors = new Map<string, string | undefined>();
 
   constructor(params: {
@@ -418,6 +420,7 @@ export class YouPetActionRequestDispatcher {
     workerId?: string;
     executeMutation: YouPetActionRequestMutationExecutor;
     logger?: YouPetActionRequestLogger;
+    cursorStore?: YouPetActionRequestCursorStore;
     now?: () => Date;
   }) {
     requireUuid(params.tenantId, "tenant_id");
@@ -428,6 +431,7 @@ export class YouPetActionRequestDispatcher {
     this.workerId = params.workerId ?? randomUUID();
     this.executeMutation = params.executeMutation;
     this.logger = params.logger;
+    this.cursorStore = params.cursorStore;
     this.now = params.now ?? (() => new Date());
   }
 
@@ -463,8 +467,7 @@ export class YouPetActionRequestDispatcher {
     processedCandidateIds: Set<string>,
     result: YouPetActionRequestDispatchResult,
   ): Promise<void> {
-    const sliceKey = `${params.approvalState}:${params.executionState}`;
-    const savedCursor = this.sliceCursors.get(sliceKey);
+    const savedCursor = this.loadSliceCursor(params);
     const seenSliceCandidateIds = new Set<string>();
     const headPage = await this.client.list({
       tenantId: this.tenantId,
@@ -480,14 +483,14 @@ export class YouPetActionRequestDispatcher {
       result,
     );
     if (!headPage.nextCursor) {
-      this.sliceCursors.delete(sliceKey);
+      this.clearSliceCursor(params);
       return;
     }
 
     let cursor = savedCursor ?? headPage.nextCursor;
     const seenBacklogCursors = new Set<string>([cursor]);
     let noProgressPages = 0;
-    this.sliceCursors.set(sliceKey, cursor);
+    this.saveSliceCursor(params, cursor);
     for (
       let pageCount = 1;
       pageCount < ACTION_REQUEST_MAX_PAGES_PER_SLICE_PER_DISPATCH;
@@ -508,7 +511,7 @@ export class YouPetActionRequestDispatcher {
         result,
       );
       if (!response.nextCursor) {
-        this.sliceCursors.delete(sliceKey);
+        this.clearSliceCursor(params);
         return;
       }
       if (seenBacklogCursors.has(response.nextCursor)) {
@@ -520,8 +523,55 @@ export class YouPetActionRequestDispatcher {
       }
       cursor = response.nextCursor;
       seenBacklogCursors.add(cursor);
-      this.sliceCursors.set(sliceKey, cursor);
+      this.saveSliceCursor(params, cursor);
     }
+  }
+
+  private loadSliceCursor(params: {
+    approvalState: "approved" | "not_required";
+    executionState: YouPetActionRequestExecutionState;
+  }): string | undefined {
+    const sliceKey = `${params.approvalState}:${params.executionState}`;
+    return (
+      this.cursorStore?.load({
+        tenantId: this.tenantId,
+        actorId: this.actorId,
+        approvalState: params.approvalState,
+        executionState: params.executionState,
+      }) ?? this.sliceCursors.get(sliceKey)
+    );
+  }
+
+  private saveSliceCursor(
+    params: {
+      approvalState: "approved" | "not_required";
+      executionState: YouPetActionRequestExecutionState;
+    },
+    cursor: string,
+  ): void {
+    const sliceKey = `${params.approvalState}:${params.executionState}`;
+    this.sliceCursors.set(sliceKey, cursor);
+    this.cursorStore?.save({
+      tenantId: this.tenantId,
+      actorId: this.actorId,
+      approvalState: params.approvalState,
+      executionState: params.executionState,
+      nextCursor: cursor,
+    });
+  }
+
+  private clearSliceCursor(params: {
+    approvalState: "approved" | "not_required";
+    executionState: YouPetActionRequestExecutionState;
+  }): void {
+    const sliceKey = `${params.approvalState}:${params.executionState}`;
+    this.sliceCursors.delete(sliceKey);
+    this.cursorStore?.clear({
+      tenantId: this.tenantId,
+      actorId: this.actorId,
+      approvalState: params.approvalState,
+      executionState: params.executionState,
+    });
   }
 
   private async dispatchCandidatePageItems(

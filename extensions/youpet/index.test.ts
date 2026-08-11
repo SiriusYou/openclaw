@@ -150,7 +150,7 @@ describe("youpet plugin registration", () => {
     service.stop?.();
 
     const flowStore = createYouPetTestFlowStore(env).flowStore;
-    expect(openSyncKeyedStore).toHaveBeenCalledTimes(2);
+    expect(openSyncKeyedStore).toHaveBeenCalledTimes(3);
     expect(flowStore.lookupFlowByPlanId("00000000-0000-4000-8000-000000000301")).toMatchObject({
       plan_id: "00000000-0000-4000-8000-000000000301",
       pet_id: "00000000-0000-4000-8000-000000000501",
@@ -235,7 +235,7 @@ describe("youpet plugin registration", () => {
     service.stop?.();
 
     const flowStore = createYouPetTestFlowStore(env).flowStore;
-    expect(openSyncKeyedStore).toHaveBeenCalledTimes(2);
+    expect(openSyncKeyedStore).toHaveBeenCalledTimes(3);
     expect(flowStore.lookupFlowByPlanId("00000000-0000-4000-8000-000000000301")).toMatchObject({
       plan_id: "00000000-0000-4000-8000-000000000301",
       pet_id: "00000000-0000-4000-8000-000000000501",
@@ -317,7 +317,7 @@ describe("youpet plugin registration", () => {
 
     const flowStore = createYouPetTestFlowStore(env).flowStore;
     const flow = flowStore.lookupFlowByPlanId("00000000-0000-4000-8000-000000000301");
-    expect(openSyncKeyedStore).toHaveBeenCalledTimes(2);
+    expect(openSyncKeyedStore).toHaveBeenCalledTimes(3);
     expect(flow).toMatchObject({
       plan_id: "00000000-0000-4000-8000-000000000301",
       pet_id: "00000000-0000-4000-8000-000000000501",
