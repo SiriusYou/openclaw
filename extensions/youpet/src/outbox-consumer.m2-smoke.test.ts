@@ -692,10 +692,7 @@ describe("YouPet M2 OpenClaw flow live smoke", () => {
         },
       );
 
-      const forcedExpiry = await forceActionRequestRecoveryBridge(
-        databaseUrl,
-        taskEscalation.action_request.id,
-      );
+      await forceActionRequestRecoveryBridge(databaseUrl, taskEscalation.action_request.id);
 
       const recoveryRequests: RecordedRequest[] = [];
       const recoveryConsumer = new YouPetOutboxConsumer({
@@ -728,7 +725,7 @@ describe("YouPet M2 OpenClaw flow live smoke", () => {
         state: "failed",
         error: {
           code: "execution_authorization_expired",
-          details: { policy_expires_at: forcedExpiry },
+          message: "policy expired before execution completed",
         },
       });
       expect(failedExecution[0]?.body).not.toHaveProperty("worker_id");

@@ -735,9 +735,6 @@ describe("YouPet ActionRequest dispatcher", () => {
         error: {
           code: "execution_authorization_expired",
           message: "policy expired before execution completed",
-          details: {
-            policy_expires_at: "2026-08-10T01:05:00Z",
-          },
         },
       },
     });
@@ -791,9 +788,6 @@ describe("YouPet ActionRequest dispatcher", () => {
         error: {
           code: "execution_authorization_expired",
           message: "policy expired before execution completed",
-          details: {
-            policy_expires_at: "2026-08-10T01:05:00Z",
-          },
         },
       },
     });
@@ -1086,7 +1080,6 @@ describe("FakeActionRequestCore policy-expired recovery contract", () => {
           error: {
             code: "execution_authorization_expired",
             message: "policy expired before execution completed",
-            details: { policy_expires_at: "2026-08-10T01:05:00Z" },
           },
         },
         idempotencyKey: "workerless-expired-lease",
@@ -1120,7 +1113,6 @@ describe("FakeActionRequestCore policy-expired recovery contract", () => {
           error: {
             code: "execution_authorization_expired",
             message: "policy expired before execution completed",
-            details: { policy_expires_at: "2026-08-10T01:05:00Z" },
           },
         },
         idempotencyKey: "workerless-legacy-null",
@@ -1159,7 +1151,6 @@ describe("FakeActionRequestCore policy-expired recovery contract", () => {
             expected_row_version: 4,
             error: {
               code: "execution_authorization_expired",
-              details: { policy_expires_at: policyExpiresAt ?? "missing" },
               message: "any message is ignored by the fake parity gate",
             },
           },
@@ -1199,7 +1190,6 @@ describe("FakeActionRequestCore policy-expired recovery contract", () => {
             error: {
               code: "execution_authorization_expired",
               message: "policy expired before execution completed",
-              details: { policy_expires_at: "2026-08-10T01:05:00Z" },
             },
           },
           idempotencyKey,

@@ -740,7 +740,7 @@ export class YouPetActionRequestDispatcher {
           state: "failed",
           expected_row_version: current.row_version,
           ...(workerId ? { worker_id: workerId } : {}),
-          error: buildExpiredAuthorizationRecoveryError(current.action_request),
+          error: buildExpiredAuthorizationRecoveryError(),
         },
         idempotencyKey: stableKey(
           "execution-recovery",
@@ -978,15 +978,12 @@ function hasRecoverablePolicyAuthorizationExpiry(request: YouPetActionRequest, n
   return Number.isFinite(expiresAt.valueOf()) && expiresAt <= now;
 }
 
-function buildExpiredAuthorizationRecoveryError(
-  request: YouPetActionRequest,
-): NonNullable<YouPetActionRequestExecutionUpdate["error"]> {
+function buildExpiredAuthorizationRecoveryError(): NonNullable<
+  YouPetActionRequestExecutionUpdate["error"]
+> {
   return {
     code: EXECUTION_AUTHORIZATION_EXPIRED_CODE,
     message: EXECUTION_AUTHORIZATION_EXPIRED_MESSAGE,
-    ...(request.policy.expires_at
-      ? { details: { policy_expires_at: request.policy.expires_at } }
-      : {}),
   };
 }
 
