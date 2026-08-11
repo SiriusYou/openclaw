@@ -396,8 +396,7 @@ const ACTION_REQUEST_PAGE_LIMIT = 200;
 // Defensive invariant only; reset whenever pagination yields any unseen candidate.
 const ACTION_REQUEST_PAGE_NO_PROGRESS_LIMIT = 10_000;
 const EXECUTION_AUTHORIZATION_EXPIRED_CODE = "execution_authorization_expired";
-const EXECUTION_AUTHORIZATION_EXPIRED_MESSAGE =
-  "cannot update execution after policy authorization expired";
+const EXECUTION_AUTHORIZATION_EXPIRED_MESSAGE = "policy expired before execution completed";
 
 export class YouPetActionRequestDispatcher {
   private readonly client: Pick<

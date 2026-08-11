@@ -734,7 +734,7 @@ describe("YouPet ActionRequest dispatcher", () => {
         worker_id: "worker-a",
         error: {
           code: "execution_authorization_expired",
-          message: "cannot update execution after policy authorization expired",
+          message: "policy expired before execution completed",
           details: {
             policy_expires_at: "2026-08-10T01:05:00Z",
           },
@@ -790,7 +790,7 @@ describe("YouPet ActionRequest dispatcher", () => {
         expected_row_version: 4,
         error: {
           code: "execution_authorization_expired",
-          message: "cannot update execution after policy authorization expired",
+          message: "policy expired before execution completed",
           details: {
             policy_expires_at: "2026-08-10T01:05:00Z",
           },
@@ -1085,7 +1085,7 @@ describe("FakeActionRequestCore policy-expired recovery contract", () => {
           expected_row_version: 4,
           error: {
             code: "execution_authorization_expired",
-            message: "cannot update execution after policy authorization expired",
+            message: "policy expired before execution completed",
             details: { policy_expires_at: "2026-08-10T01:05:00Z" },
           },
         },
@@ -1119,7 +1119,7 @@ describe("FakeActionRequestCore policy-expired recovery contract", () => {
           expected_row_version: 4,
           error: {
             code: "execution_authorization_expired",
-            message: "cannot update execution after policy authorization expired",
+            message: "policy expired before execution completed",
             details: { policy_expires_at: "2026-08-10T01:05:00Z" },
           },
         },
@@ -1198,7 +1198,7 @@ describe("FakeActionRequestCore policy-expired recovery contract", () => {
             expected_row_version: 4,
             error: {
               code: "execution_authorization_expired",
-              message: "cannot update execution after policy authorization expired",
+              message: "policy expired before execution completed",
               details: { policy_expires_at: "2026-08-10T01:05:00Z" },
             },
           },
