@@ -882,14 +882,24 @@ WITH boundary AS (
         jsonb_set(
           requests.document,
           '{policy,expires_at}',
-          to_jsonb(boundary.expires_at),
+          to_jsonb(
+            to_char(
+              boundary.expires_at AT TIME ZONE 'UTC',
+              'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+            )
+          ),
           true
         )
       WHEN requests.document ? 'action_request' THEN
         jsonb_set(
           requests.document,
           '{action_request,policy,expires_at}',
-          to_jsonb(boundary.expires_at),
+          to_jsonb(
+            to_char(
+              boundary.expires_at AT TIME ZONE 'UTC',
+              'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+            )
+          ),
           true
         )
       ELSE requests.document
