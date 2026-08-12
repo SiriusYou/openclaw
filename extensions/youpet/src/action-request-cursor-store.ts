@@ -4,11 +4,27 @@ import type {
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 
 export const YOUPET_ACTION_REQUEST_CURSOR_STORE_NAMESPACE = "action-request-cursors";
+// One configured tenant/actor owns six dispatcher slice keys. The fixed bound
+// leaves room for a few retired identities without making this a multi-tenant store.
 export const YOUPET_ACTION_REQUEST_CURSOR_STORE_MAX_ENTRIES = 32;
 
 export type YouPetActionRequestCursorRecord = {
   next_cursor: string;
 };
+
+export class YouPetActionRequestCursorStoreError extends Error {
+  override readonly cause: unknown;
+  readonly operation: "load" | "save" | "clear";
+  readonly sliceKey: string;
+
+  constructor(params: { cause: unknown; operation: "load" | "save" | "clear"; sliceKey: string }) {
+    super(`YouPet ActionRequest cursor ${params.operation} failed for ${params.sliceKey}`);
+    this.name = "YouPetActionRequestCursorStoreError";
+    this.cause = params.cause;
+    this.operation = params.operation;
+    this.sliceKey = params.sliceKey;
+  }
+}
 
 export type YouPetActionRequestCursorStore = {
   load(params: {
@@ -52,15 +68,30 @@ export function createYouPetActionRequestCursorStore(
 ): YouPetActionRequestCursorStore {
   return {
     load(params) {
-      return store.lookup(toYouPetActionRequestCursorKey(params))?.next_cursor;
+      const sliceKey = toYouPetActionRequestCursorKey(params);
+      try {
+        return store.lookup(sliceKey)?.next_cursor;
+      } catch (error) {
+        throw wrapCursorStoreError(error, "load", sliceKey);
+      }
     },
     save(params) {
-      store.register(toYouPetActionRequestCursorKey(params), {
-        next_cursor: params.nextCursor,
-      });
+      const sliceKey = toYouPetActionRequestCursorKey(params);
+      try {
+        store.register(sliceKey, {
+          next_cursor: params.nextCursor,
+        });
+      } catch (error) {
+        throw wrapCursorStoreError(error, "save", sliceKey);
+      }
     },
     clear(params) {
-      store.delete(toYouPetActionRequestCursorKey(params));
+      const sliceKey = toYouPetActionRequestCursorKey(params);
+      try {
+        store.delete(sliceKey);
+      } catch (error) {
+        throw wrapCursorStoreError(error, "clear", sliceKey);
+      }
     },
   };
 }
@@ -78,4 +109,19 @@ export function toYouPetActionRequestCursorKey(params: {
     params.approvalState,
     params.executionState,
   ].join(".");
+}
+
+function wrapCursorStoreError(
+  error: unknown,
+  operation: "load" | "save" | "clear",
+  sliceKey: string,
+): YouPetActionRequestCursorStoreError {
+  if (error instanceof YouPetActionRequestCursorStoreError) {
+    return error;
+  }
+  return new YouPetActionRequestCursorStoreError({
+    cause: error,
+    operation,
+    sliceKey,
+  });
 }

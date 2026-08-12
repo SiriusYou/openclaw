@@ -2,6 +2,7 @@ import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
+import { buildYouPetActionRequestProposal } from "./src/action-request-routing.js";
 import {
   cleanupYouPetTempStateDirs,
   createYouPetTempStateEnv,
@@ -12,6 +13,8 @@ import {
   actionRequestEnvelopeFromCreate,
   createCoreOutboxEvent,
   TASK_MISSED_CORE_OUTBOX_EVENT,
+  TEST_TASK_ID,
+  TEST_TENANT_ID,
 } from "./test/outbox-consumer.fixture.js";
 
 type CapturedRequest = {
@@ -19,6 +22,14 @@ type CapturedRequest = {
   method: string;
   body: unknown;
 };
+
+const PLUGIN_RESTART_ACTOR_ID = "openclaw-youpet-consumer";
+const PLUGIN_RESTART_CURSOR_PARAMS = {
+  tenantId: TEST_TENANT_ID,
+  actorId: PLUGIN_RESTART_ACTOR_ID,
+  approvalState: "approved",
+  executionState: "not_started",
+} as const;
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -72,15 +83,22 @@ function createFetch(events: ReturnType<typeof createCoreOutboxEvent>[]) {
 }
 
 async function waitForRequestPath(requests: CapturedRequest[], path: string): Promise<void> {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    if (requests.some((request) => new URL(request.url).pathname === path)) {
+  await waitForCondition(
+    () => requests.some((request) => new URL(request.url).pathname === path),
+    path,
+  );
+}
+
+async function waitForCondition(condition: () => boolean, description: string): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (condition()) {
       return;
     }
     await new Promise((resolve) => {
       setTimeout(resolve, 10);
     });
   }
-  throw new Error(`timed out waiting for ${path}`);
+  throw new Error(`timed out waiting for ${description}`);
 }
 
 function sourceCyclePaths(requests: CapturedRequest[]): string[] {
@@ -92,6 +110,104 @@ function sourceCyclePaths(requests: CapturedRequest[]): string[] {
     .map((request) => new URL(request.url).pathname);
 }
 
+function createPluginRestartFetch(
+  cursors: Array<string | undefined>,
+  foreignTemplate: ReturnType<typeof actionRequestEnvelopeFromCreate>,
+  cycleTailSignals: { count: number },
+) {
+  return vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(
+      typeof input === "string" || input instanceof URL ? String(input) : input.url,
+    );
+    const method = init?.method ?? "GET";
+    if (url.pathname === "/internal/events/outbox") {
+      return jsonResponse({ items: [] });
+    }
+    if (url.pathname !== "/api/v1/action-requests" || method !== "GET") {
+      return jsonResponse({ detail: { code: "not_found", message: url.pathname } }, 404);
+    }
+    if (
+      url.searchParams.get("approval_state") === "not_required" &&
+      url.searchParams.get("execution_state") === "not_started" &&
+      !url.searchParams.has("cursor")
+    ) {
+      cycleTailSignals.count += 1;
+      return jsonResponse({ items: [], count: 0, next_cursor: null });
+    }
+    if (
+      url.searchParams.get("approval_state") !== "approved" ||
+      url.searchParams.get("execution_state") !== "not_started"
+    ) {
+      return jsonResponse({ items: [], count: 0, next_cursor: null });
+    }
+    const cursor = url.searchParams.get("cursor") ?? undefined;
+    cursors.push(cursor);
+    const pageIndex = cursor ? Number(cursor.replace("cursor-", "")) : 0;
+    if (pageIndex === 200) {
+      return jsonResponse({ items: [], count: 0, next_cursor: null });
+    }
+    const item = structuredClone(foreignTemplate);
+    item.action_request.id = `00000000-0000-4000-8000-${String(80_000 + pageIndex).padStart(12, "0")}`;
+    item.action_request.proposer = { type: "agent", id: `foreign-agent-${pageIndex}` };
+    return jsonResponse({ items: [item], count: 1, next_cursor: `cursor-${pageIndex + 1}` });
+  });
+}
+
+function startPluginRestartService(
+  env: ReturnType<typeof createYouPetTempStateEnv>,
+  cursors: Array<string | undefined>,
+) {
+  const cycleTailSignals = { count: 0 };
+  const proposal = buildYouPetActionRequestProposal({
+    routeId: "task-escalate",
+    tenantId: TEST_TENANT_ID,
+    actorId: PLUGIN_RESTART_ACTOR_ID,
+    sourceEventId: "event-plugin-restart",
+    sourceOccurredAt: "2026-08-11T01:00:00Z",
+    correlationId: "corr-plugin-restart",
+    targetId: TEST_TASK_ID,
+    payloadFields: {
+      task_id: TEST_TASK_ID,
+      severity: "medium",
+      summary: "Task missed the configured YouPet check-in threshold.",
+    },
+  });
+  const foreignTemplate = actionRequestEnvelopeFromCreate(proposal.request);
+  foreignTemplate.action_request.approval = { state: "approved" };
+  vi.stubGlobal("fetch", createPluginRestartFetch(cursors, foreignTemplate, cycleTailSignals));
+  const registerService = vi.fn();
+  plugin.register(
+    createTestPluginApi({
+      id: "youpet",
+      name: "YouPet Core",
+      source: "test",
+      pluginConfig: {
+        enabled: true,
+        coreBaseUrl: "https://core.example.com",
+        serviceToken: "svc-token",
+        tenantId: TEST_TENANT_ID,
+        pollIntervalMs: 60_000,
+      },
+      runtime: { state: createYouPetTestRuntimeState(env) } as never,
+      registerService,
+    }),
+  );
+  const service = registerService.mock.calls.at(0)?.at(0);
+  if (!service) {
+    throw new Error("expected youpet plugin to register the outbox service");
+  }
+  service.start({
+    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    stateDir: "",
+    config: {},
+  });
+  return { cycleTailSignals, service };
+}
+
+function loadPluginRestartCursor(env: ReturnType<typeof createYouPetTempStateEnv>) {
+  return createYouPetTestFlowStore(env).actionRequestCursorStore.load(PLUGIN_RESTART_CURSOR_PARAMS);
+}
+
 afterEach(async () => {
   vi.unstubAllGlobals();
   resetPluginStateStoreForTests();
@@ -99,6 +215,39 @@ afterEach(async () => {
 });
 
 describe("youpet plugin registration", () => {
+  it("reopens the production cursor wiring and resumes its SQLite frontier", async () => {
+    const env = createYouPetTempStateEnv();
+    const firstCursors: Array<string | undefined> = [];
+    const firstRun = startPluginRestartService(env, firstCursors);
+    await waitForCondition(
+      () => loadPluginRestartCursor(env) === "cursor-200",
+      "the first plugin service to persist cursor-200",
+    );
+    await waitForCondition(
+      () => firstRun.cycleTailSignals.count >= 1,
+      "the first plugin service to finish its not_required/not_started tail slice",
+    );
+    firstRun.service.stop?.();
+
+    resetPluginStateStoreForTests();
+
+    const secondCursors: Array<string | undefined> = [];
+    const secondRun = startPluginRestartService(env, secondCursors);
+    await waitForCondition(
+      () => secondCursors.length >= 2,
+      "the restarted plugin approved/not_started cursor request",
+    );
+    await waitForCondition(
+      () => secondRun.cycleTailSignals.count >= 1,
+      "the restarted plugin service to finish its not_required/not_started tail slice",
+    );
+    secondRun.service.stop?.();
+
+    expect(firstCursors[0]).toBeUndefined();
+    expect(firstCursors.at(-1)).toBe("cursor-199");
+    expect(secondCursors.slice(0, 2)).toEqual([undefined, "cursor-200"]);
+  });
+
   it("wires health plan proposal creation through the production outbox service path", async () => {
     const env = createYouPetTempStateEnv();
     const runtimeState = createYouPetTestRuntimeState(env);

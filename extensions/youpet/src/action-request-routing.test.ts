@@ -10,8 +10,11 @@ import {
 } from "../test/flow-store.fixture.js";
 import {
   createYouPetActionRequestCursorStore,
+  toYouPetActionRequestCursorKey,
+  YouPetActionRequestCursorStoreError,
   YOUPET_ACTION_REQUEST_CURSOR_STORE_MAX_ENTRIES,
   YOUPET_ACTION_REQUEST_CURSOR_STORE_NAMESPACE,
+  type YouPetActionRequestCursorStore,
 } from "./action-request-cursor-store.js";
 import {
   buildYouPetActionRequestProposal,
@@ -30,6 +33,18 @@ const TASK_ID = "00000000-0000-4000-8000-000000000201";
 const PLAN_ID = "00000000-0000-4000-8000-000000000301";
 const REQUEST_ID = "00000000-0000-4000-8000-000000000401";
 const ACTOR_ID = "openclaw-youpet-consumer";
+const REACHABLE_CURSOR_SLICES = [
+  { approvalState: "approved", executionState: "running" },
+  { approvalState: "approved", executionState: "queued" },
+  { approvalState: "approved", executionState: "not_started" },
+  { approvalState: "not_required", executionState: "running" },
+  { approvalState: "not_required", executionState: "queued" },
+  { approvalState: "not_required", executionState: "not_started" },
+] as const;
+
+type CursorSliceKey = `${"approved" | "not_required"}:${"running" | "queued" | "not_started"}`;
+type CursorFaultOperation = "load" | "save" | "clear";
+type CursorListPage = { items: YouPetActionRequestEnvelope[]; nextCursor: string | null };
 
 afterEach(async () => {
   resetPluginStateStoreForTests();
@@ -283,6 +298,94 @@ describe("YouPet ActionRequest client boundary", () => {
 
     await expect(client.get(REQUEST_ID)).rejects.toThrow(/execution_claim must be an object/u);
   });
+});
+
+describe("YouPet ActionRequest cursor store", () => {
+  it("loads all six reachable tenant and actor slices within the 32-entry namespace budget", () => {
+    vi.useFakeTimers();
+    const env = createYouPetTempStateEnv();
+    const rawStore = createPluginStateSyncKeyedStoreForTests("youpet", {
+      namespace: YOUPET_ACTION_REQUEST_CURSOR_STORE_NAMESPACE,
+      maxEntries: YOUPET_ACTION_REQUEST_CURSOR_STORE_MAX_ENTRIES,
+      env,
+    });
+    const cursorStore = createYouPetActionRequestCursorStore(rawStore);
+    try {
+      expect(YOUPET_ACTION_REQUEST_CURSOR_STORE_MAX_ENTRIES).toBe(32);
+      expect(REACHABLE_CURSOR_SLICES).toHaveLength(6);
+      expect(REACHABLE_CURSOR_SLICES.length).toBeLessThan(
+        YOUPET_ACTION_REQUEST_CURSOR_STORE_MAX_ENTRIES,
+      );
+
+      const fillerEntries = Array.from(
+        { length: YOUPET_ACTION_REQUEST_CURSOR_STORE_MAX_ENTRIES - REACHABLE_CURSOR_SLICES.length },
+        (_, index) => ({
+          tenantId: nthUuid(80_000 + index),
+          actorId: `cursor-filler-${index + 1}`,
+          approvalState: "approved" as const,
+          executionState: "not_started" as const,
+          nextCursor: `filler-cursor-${index + 1}`,
+        }),
+      );
+      const oldestFiller = fillerEntries[0];
+      if (!oldestFiller) {
+        throw new Error("expected at least one filler cursor-store entry");
+      }
+      const overflowEntry = {
+        tenantId: nthUuid(90_000),
+        actorId: "cursor-filler-overflow",
+        approvalState: "not_required" as const,
+        executionState: "queued" as const,
+        nextCursor: "filler-cursor-overflow",
+      };
+
+      fillerEntries.forEach((entry, index) => {
+        vi.setSystemTime(1_000 + index);
+        cursorStore.save(entry);
+      });
+      REACHABLE_CURSOR_SLICES.forEach((slice, index) => {
+        vi.setSystemTime(2_000 + index);
+        cursorStore.save({
+          tenantId: TENANT_ID,
+          actorId: ACTOR_ID,
+          approvalState: slice.approvalState,
+          executionState: slice.executionState,
+          nextCursor: `cursor-${index + 1}`,
+        });
+      });
+      vi.setSystemTime(3_000);
+      cursorStore.save(overflowEntry);
+
+      expect(rawStore.entries()).toHaveLength(YOUPET_ACTION_REQUEST_CURSOR_STORE_MAX_ENTRIES);
+      expect(
+        rawStore
+          .entries()
+          .map((entry) => entry.key)
+          .includes(toYouPetActionRequestCursorKey(overflowEntry)),
+      ).toBe(true);
+      expect(cursorStore.load(oldestFiller)).toBeUndefined();
+      expect(cursorStore.load(overflowEntry)).toBe("filler-cursor-overflow");
+      expect(
+        REACHABLE_CURSOR_SLICES.map((slice) =>
+          cursorStore.load({
+            tenantId: TENANT_ID,
+            actorId: ACTOR_ID,
+            approvalState: slice.approvalState,
+            executionState: slice.executionState,
+          }),
+        ),
+      ).toEqual(["cursor-1", "cursor-2", "cursor-3", "cursor-4", "cursor-5", "cursor-6"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["load", "save", "clear"] as const)(
+    "wraps %s faults with an explicit cursor-store error",
+    (operation) => {
+      expectCursorStoreFault(operation);
+    },
+  );
 });
 
 describe("YouPet ActionRequest dispatcher", () => {
@@ -614,6 +717,87 @@ describe("YouPet ActionRequest dispatcher", () => {
     });
 
     await expect(dispatcher.dispatchOnce()).rejects.toThrow(/pagination no-progress guard/u);
+  });
+
+  it.each([
+    {
+      operation: "load",
+      requestId: 42_100,
+      page: { items: [], nextCursor: null },
+      message: "cursor load failed",
+    },
+    {
+      operation: "save",
+      requestId: 42_101,
+      page: { items: [], nextCursor: "cursor-1" },
+      message: "cursor save failed",
+    },
+    {
+      operation: "clear",
+      requestId: 42_102,
+      page: { items: [], nextCursor: null },
+      message: "cursor clear failed",
+    },
+  ] as const)(
+    "isolates a cursor-store $operation failure to that slice and continues later slices",
+    async ({ operation, requestId, page, message }) => {
+      const { result, validCore, logger } = await runCursorSliceIsolationCase({
+        operation,
+        requestId,
+        page,
+      });
+
+      expect(result).toMatchObject({ errored: 1, claimed: 1, succeeded: 1 });
+      expect(validCore.claims).toHaveLength(1);
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining(`ActionRequest cursor slice approved/queued failed: ${message}`),
+      );
+    },
+  );
+
+  it("does not claim durable backlog progress when cursor save fails before restart", async () => {
+    const env = createYouPetTempStateEnv();
+    const valid = createEnvelope({ requestId: nthUuid(42_103) });
+    const validCore = new FakeActionRequestCore(valid);
+    const firstRequests: Array<string | undefined> = [];
+    const first = await dispatchDeepBacklogOnce({
+      validCore,
+      valid,
+      requests: firstRequests,
+      cursorStore: createFaultingCursorStore(
+        { save: ["approved:not_started"] },
+        { delegate: createTestCursorStore(env), once: true },
+      ),
+    });
+
+    expect(first).toMatchObject({ errored: 1, claimed: 0, succeeded: 0 });
+    expect(firstRequests).toEqual([undefined]);
+
+    resetPluginStateStoreForTests();
+
+    const secondRequests: Array<string | undefined> = [];
+    const second = await dispatchDeepBacklogOnce({
+      validCore,
+      valid,
+      requests: secondRequests,
+      cursorStore: createTestCursorStore(env),
+    });
+
+    expect(second).toMatchObject({ succeeded: 0, errored: 0 });
+    expect(secondRequests[0]).toBeUndefined();
+
+    resetPluginStateStoreForTests();
+
+    const thirdRequests: Array<string | undefined> = [];
+    const third = await dispatchDeepBacklogOnce({
+      validCore,
+      valid,
+      requests: thirdRequests,
+      cursorStore: createTestCursorStore(env),
+    });
+
+    expect(third).toMatchObject({ claimed: 1, succeeded: 1, errored: 0 });
+    expect(thirdRequests).toEqual([undefined, "cursor-200"]);
   });
 
   it("bounds full-page backlog memory and resumes after the page budget", async () => {
@@ -2329,6 +2513,249 @@ function hasRecoverableFakePolicyExpiry(expiresAt: string | undefined, now: Date
   }
   const parsed = new Date(expiresAt);
   return Number.isFinite(parsed.valueOf()) && parsed <= now;
+}
+
+function expectCursorStoreFault(operation: CursorFaultOperation): void {
+  const params = {
+    tenantId: TENANT_ID,
+    actorId: ACTOR_ID,
+    approvalState: "approved" as const,
+    executionState: "not_started" as const,
+  };
+  const cursorStore = createYouPetActionRequestCursorStore({
+    lookup() {
+      throw new Error("boom-load");
+    },
+    register() {
+      throw new Error("boom-save");
+    },
+    registerIfAbsent() {
+      return false;
+    },
+    update() {
+      return false;
+    },
+    consume() {
+      return undefined;
+    },
+    delete() {
+      throw new Error("boom-clear");
+    },
+    entries() {
+      return [];
+    },
+    clear() {},
+  } as ReturnType<typeof createPluginStateSyncKeyedStoreForTests>);
+  try {
+    if (operation === "load") {
+      cursorStore.load(params);
+    } else if (operation === "save") {
+      cursorStore.save({ ...params, nextCursor: "cursor-1" });
+    } else {
+      cursorStore.clear(params);
+    }
+    throw new Error("expected cursor store operation to throw");
+  } catch (error) {
+    expect(error).toBeInstanceOf(YouPetActionRequestCursorStoreError);
+    expect(error).toMatchObject({
+      name: "YouPetActionRequestCursorStoreError",
+      operation,
+      sliceKey: toYouPetActionRequestCursorKey(params),
+    });
+  }
+}
+
+function createCoreBackedClient(
+  validCore: FakeActionRequestCore,
+  list: (params: {
+    approvalState: string;
+    executionState: string;
+    cursor?: string;
+  }) => Promise<CursorListPage>,
+) {
+  return {
+    list,
+    async get(actionRequestId: string) {
+      return await validCore.get(actionRequestId);
+    },
+    async claimExecution(params: Parameters<FakeActionRequestCore["claimExecution"]>[0]) {
+      return await validCore.claimExecution(params);
+    },
+    async updateExecution(params: Parameters<FakeActionRequestCore["updateExecution"]>[0]) {
+      return await validCore.updateExecution(params);
+    },
+  };
+}
+
+async function executeSuccessfulMutation(): Promise<{
+  kind: "succeeded";
+  result: { outcome_code: "ok" };
+}> {
+  return { kind: "succeeded", result: { outcome_code: "ok" } };
+}
+
+async function runCursorSliceIsolationCase(options: {
+  operation: CursorFaultOperation;
+  requestId: number;
+  page: CursorListPage;
+}): Promise<{
+  result: Awaited<ReturnType<YouPetActionRequestDispatcher["dispatchOnce"]>>;
+  validCore: FakeActionRequestCore;
+  logger: { error: ReturnType<typeof vi.fn> };
+}> {
+  const valid = createEnvelope({ requestId: nthUuid(options.requestId) });
+  const validCore = new FakeActionRequestCore(valid);
+  const logger = { error: vi.fn() };
+  const dispatcher = new YouPetActionRequestDispatcher({
+    client: createSliceIsolationClient(validCore, {
+      "approved:queued": options.page,
+      "approved:not_started": { items: [structuredClone(valid)], nextCursor: null },
+    }),
+    tenantId: TENANT_ID,
+    actorId: ACTOR_ID,
+    workerId: "worker-a",
+    executeMutation: executeSuccessfulMutation,
+    cursorStore: createFaultingCursorStore({ [options.operation]: ["approved:queued"] }),
+    logger,
+  });
+  return {
+    result: await dispatcher.dispatchOnce(),
+    validCore,
+    logger,
+  };
+}
+
+async function dispatchDeepBacklogOnce(options: {
+  validCore: FakeActionRequestCore;
+  valid: YouPetActionRequestEnvelope;
+  requests: Array<string | undefined>;
+  cursorStore: YouPetActionRequestCursorStore;
+}): Promise<Awaited<ReturnType<YouPetActionRequestDispatcher["dispatchOnce"]>>> {
+  return await new YouPetActionRequestDispatcher({
+    client: createDeepBacklogClient(options.validCore, options.valid, options.requests),
+    tenantId: TENANT_ID,
+    actorId: ACTOR_ID,
+    workerId: "worker-a",
+    executeMutation: executeSuccessfulMutation,
+    cursorStore: options.cursorStore,
+  }).dispatchOnce();
+}
+
+function createSliceIsolationClient(
+  validCore: FakeActionRequestCore,
+  pages: Partial<Record<CursorSliceKey, CursorListPage>>,
+) {
+  return createCoreBackedClient(validCore, async (params) => {
+    const page = pages[`${params.approvalState}:${params.executionState}` as CursorSliceKey];
+    if (!page || params.cursor) {
+      return { items: [], nextCursor: null };
+    }
+    return {
+      items: structuredClone(page.items),
+      nextCursor: page.nextCursor,
+    };
+  });
+}
+
+function createDeepBacklogClient(
+  validCore: FakeActionRequestCore,
+  valid: YouPetActionRequestEnvelope,
+  requests: Array<string | undefined>,
+) {
+  return createCoreBackedClient(validCore, async (params) => {
+    if (params.approvalState !== "approved" || params.executionState !== "not_started") {
+      return { items: [], nextCursor: null };
+    }
+    requests.push(params.cursor);
+    const pageIndex = params.cursor ? Number(params.cursor.replace("cursor-", "")) : 0;
+    if (pageIndex < 200) {
+      return {
+        items: [
+          createEnvelope({
+            requestId: nthUuid(70_000 + pageIndex),
+            proposerId: `foreign-agent-${pageIndex}`,
+          }),
+        ],
+        nextCursor: `cursor-${pageIndex + 1}`,
+      };
+    }
+    return { items: [structuredClone(valid)], nextCursor: null };
+  });
+}
+
+function createFaultingCursorStore(
+  faults: Partial<Record<CursorFaultOperation, CursorSliceKey[]>>,
+  options: { delegate?: YouPetActionRequestCursorStore; once?: boolean } = {},
+): YouPetActionRequestCursorStore {
+  const delegate = options.delegate ?? createMapBackedCursorStore();
+  const triggered = new Set<string>();
+  const shouldFault = (
+    operation: CursorFaultOperation,
+    params: {
+      approvalState: "approved" | "not_required";
+      executionState: "running" | "queued" | "not_started";
+    },
+  ): boolean => {
+    const slice = `${params.approvalState}:${params.executionState}` as CursorSliceKey;
+    if (!faults[operation]?.includes(slice)) {
+      return false;
+    }
+    const key = `${operation}:${slice}`;
+    if (!options.once) {
+      return true;
+    }
+    if (triggered.has(key)) {
+      return false;
+    }
+    triggered.add(key);
+    return true;
+  };
+  const throwFault = (
+    operation: CursorFaultOperation,
+    params: Parameters<typeof toYouPetActionRequestCursorKey>[0],
+  ): never => {
+    throw new YouPetActionRequestCursorStoreError({
+      cause: new Error(`forced ${operation} fault`),
+      operation,
+      sliceKey: toYouPetActionRequestCursorKey(params),
+    });
+  };
+
+  return {
+    load(params) {
+      if (shouldFault("load", params)) {
+        return throwFault("load", params);
+      }
+      return delegate.load(params);
+    },
+    save(params) {
+      if (shouldFault("save", params)) {
+        return throwFault("save", params);
+      }
+      return delegate.save(params);
+    },
+    clear(params) {
+      if (shouldFault("clear", params)) {
+        return throwFault("clear", params);
+      }
+      return delegate.clear(params);
+    },
+  };
+}
+
+function createMapBackedCursorStore(): YouPetActionRequestCursorStore {
+  const map = new Map<string, string>();
+  return {
+    load(params) {
+      return map.get(toYouPetActionRequestCursorKey(params));
+    },
+    save(params) {
+      map.set(toYouPetActionRequestCursorKey(params), params.nextCursor);
+    },
+    clear(params) {
+      map.delete(toYouPetActionRequestCursorKey(params));
+    },
+  };
 }
 
 function createTestCursorStore(env: Record<string, string | undefined>) {

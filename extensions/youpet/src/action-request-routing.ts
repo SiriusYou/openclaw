@@ -1,5 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { YouPetActionRequestCursorStore } from "./action-request-cursor-store.js";
+import {
+  YouPetActionRequestCursorStoreError,
+  type YouPetActionRequestCursorStore,
+} from "./action-request-cursor-store.js";
 
 export type YouPetActionRequestFetch = (
   input: string | URL | Request,
@@ -393,6 +396,9 @@ export type YouPetActionRequestDispatchResult = {
   errored: number;
 };
 
+type YouPetActionRequestSliceKey =
+  `${"approved" | "not_required"}:${YouPetActionRequestExecutionState}`;
+
 const ACTION_REQUEST_PAGE_LIMIT = 200;
 const ACTION_REQUEST_MAX_PAGES_PER_SLICE_PER_DISPATCH = 200;
 const ACTION_REQUEST_PAGE_NO_PROGRESS_LIMIT = 64;
@@ -411,7 +417,7 @@ export class YouPetActionRequestDispatcher {
   private readonly logger: YouPetActionRequestLogger | undefined;
   private readonly now: () => Date;
   private readonly cursorStore: YouPetActionRequestCursorStore | undefined;
-  private readonly sliceCursors = new Map<string, string | undefined>();
+  private readonly sliceCursors = new Map<YouPetActionRequestSliceKey, string | undefined>();
 
   constructor(params: {
     client: Pick<YouPetActionRequestClient, "claimExecution" | "get" | "list" | "updateExecution">;
@@ -449,11 +455,22 @@ export class YouPetActionRequestDispatcher {
     const processedCandidateIds = new Set<string>();
     for (const executionState of ["running", "queued", "not_started"] as const) {
       for (const approvalState of ["approved", "not_required"] as const) {
-        await this.dispatchCandidatePages(
-          { approvalState, executionState },
-          processedCandidateIds,
-          result,
-        );
+        try {
+          await this.dispatchCandidatePages(
+            { approvalState, executionState },
+            processedCandidateIds,
+            result,
+          );
+        } catch (error) {
+          if (error instanceof YouPetActionRequestCursorStoreError) {
+            result.errored += 1;
+            this.logger?.error?.(
+              `[youpet] ActionRequest cursor slice ${approvalState}/${executionState} failed: ${summarizeDispatchError(error)}`,
+            );
+            continue;
+          }
+          throw error;
+        }
       }
     }
     return result;
@@ -533,15 +550,16 @@ export class YouPetActionRequestDispatcher {
     approvalState: "approved" | "not_required";
     executionState: YouPetActionRequestExecutionState;
   }): string | undefined {
-    const sliceKey = `${params.approvalState}:${params.executionState}`;
-    return (
-      this.cursorStore?.load({
+    const sliceKey = toSliceKey(params);
+    if (this.cursorStore) {
+      return this.cursorStore.load({
         tenantId: this.tenantId,
         actorId: this.actorId,
         approvalState: params.approvalState,
         executionState: params.executionState,
-      }) ?? this.sliceCursors.get(sliceKey)
-    );
+      });
+    }
+    return this.sliceCursors.get(sliceKey);
   }
 
   private saveSliceCursor(
@@ -551,8 +569,7 @@ export class YouPetActionRequestDispatcher {
     },
     cursor: string,
   ): void {
-    const sliceKey = `${params.approvalState}:${params.executionState}`;
-    this.sliceCursors.set(sliceKey, cursor);
+    const sliceKey = toSliceKey(params);
     this.cursorStore?.save({
       tenantId: this.tenantId,
       actorId: this.actorId,
@@ -560,20 +577,23 @@ export class YouPetActionRequestDispatcher {
       executionState: params.executionState,
       nextCursor: cursor,
     });
+    // Update process memory only after the durable checkpoint lands, so a save
+    // fault cannot trick this process into skipping backlog that was never persisted.
+    this.sliceCursors.set(sliceKey, cursor);
   }
 
   private clearSliceCursor(params: {
     approvalState: "approved" | "not_required";
     executionState: YouPetActionRequestExecutionState;
   }): void {
-    const sliceKey = `${params.approvalState}:${params.executionState}`;
-    this.sliceCursors.delete(sliceKey);
+    const sliceKey = toSliceKey(params);
     this.cursorStore?.clear({
       tenantId: this.tenantId,
       actorId: this.actorId,
       approvalState: params.approvalState,
       executionState: params.executionState,
     });
+    this.sliceCursors.delete(sliceKey);
   }
 
   private async dispatchCandidatePageItems(
@@ -1191,6 +1211,9 @@ function resolveExpiredRunningRecoveryMode(
 }
 
 function summarizeDispatchError(error: unknown): string {
+  if (error instanceof YouPetActionRequestCursorStoreError) {
+    return `cursor ${error.operation} failed for ${error.sliceKey}`;
+  }
   if (error instanceof YouPetActionRequestCoreError) {
     return `YouPet Core ActionRequest request failed ${error.status} ${error.path}`;
   }
@@ -1212,6 +1235,13 @@ function readCoreErrorCode(value: unknown): string | undefined {
 function stableKey(...parts: string[]): string {
   const digest = createHash("sha256").update(parts.join("\u0000")).digest("hex");
   return `openclaw.youpet.${parts[0]}.${digest}`;
+}
+
+function toSliceKey(params: {
+  approvalState: "approved" | "not_required";
+  executionState: YouPetActionRequestExecutionState;
+}): YouPetActionRequestSliceKey {
+  return `${params.approvalState}:${params.executionState}`;
 }
 
 function deterministicUuid(...parts: string[]): string {
