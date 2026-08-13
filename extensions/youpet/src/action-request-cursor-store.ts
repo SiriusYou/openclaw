@@ -12,12 +12,18 @@ export type YouPetActionRequestCursorRecord = {
   next_cursor: string;
 };
 
+export type YouPetActionRequestCursorStoreOperation = "load" | "save" | "clear";
+
 export class YouPetActionRequestCursorStoreError extends Error {
   override readonly cause: unknown;
-  readonly operation: "load" | "save" | "clear";
+  readonly operation: YouPetActionRequestCursorStoreOperation;
   readonly sliceKey: string;
 
-  constructor(params: { cause: unknown; operation: "load" | "save" | "clear"; sliceKey: string }) {
+  constructor(params: {
+    cause: unknown;
+    operation: YouPetActionRequestCursorStoreOperation;
+    sliceKey: string;
+  }) {
     super(`YouPet ActionRequest cursor ${params.operation} failed for ${params.sliceKey}`);
     this.name = "YouPetActionRequestCursorStoreError";
     this.cause = params.cause;
@@ -113,7 +119,7 @@ export function toYouPetActionRequestCursorKey(params: {
 
 function wrapCursorStoreError(
   error: unknown,
-  operation: "load" | "save" | "clear",
+  operation: YouPetActionRequestCursorStoreOperation,
   sliceKey: string,
 ): YouPetActionRequestCursorStoreError {
   if (error instanceof YouPetActionRequestCursorStoreError) {

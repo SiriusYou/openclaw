@@ -23,6 +23,7 @@ import {
   YouPetActionRequestClient,
   YouPetActionRequestCoreError,
   YouPetActionRequestDispatcher,
+  YouPetActionRequestTransportError,
   YOUPET_ACTION_REQUEST_ROUTES,
   type YouPetActionRequestEnvelope,
   type YouPetActionRequestExecutionUpdate,
@@ -297,6 +298,122 @@ describe("YouPet ActionRequest client boundary", () => {
     });
 
     await expect(client.get(REQUEST_ID)).rejects.toThrow(/execution_claim must be an object/u);
+  });
+
+  it("wraps fetch-failed and ECONNRESET as YouPetActionRequestTransportError", async () => {
+    const fetchFn = vi.fn(async () => {
+      throw Object.assign(new TypeError("fetch failed"), {
+        cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }),
+      });
+    });
+    const client = new YouPetActionRequestClient({
+      coreBaseUrl: "https://core.example.com",
+      serviceToken: "svc-token",
+      actorId: ACTOR_ID,
+      fetchFn,
+    });
+
+    await expect(
+      client.list({
+        tenantId: TENANT_ID,
+        approvalState: "approved",
+        executionState: "not_started",
+      }),
+    ).rejects.toBeInstanceOf(YouPetActionRequestTransportError);
+  });
+
+  it("wraps UND_ERR_CONNECT_TIMEOUT fetch failures as YouPetActionRequestTransportError", async () => {
+    const fetchFn = vi.fn(async () => {
+      throw Object.assign(new Error("Connect Timeout Error"), {
+        name: "ConnectTimeoutError",
+        code: "UND_ERR_CONNECT_TIMEOUT",
+      });
+    });
+    const client = new YouPetActionRequestClient({
+      coreBaseUrl: "https://core.example.com",
+      serviceToken: "svc-token",
+      actorId: ACTOR_ID,
+      fetchFn,
+    });
+
+    await expect(
+      client.list({
+        tenantId: TENANT_ID,
+        approvalState: "approved",
+        executionState: "not_started",
+      }),
+    ).rejects.toMatchObject({
+      name: "YouPetActionRequestTransportError",
+      path: "/api/v1/action-requests",
+    });
+  });
+
+  it("does not wrap a programming TypeError as transport", async () => {
+    const error = await rejectClientList(async () => {
+      throw new TypeError("Cannot read properties of undefined (reading 'ok')");
+    });
+    expect(error).toBeInstanceOf(TypeError);
+    expect(error).not.toBeInstanceOf(YouPetActionRequestTransportError);
+    expect(error).toMatchObject({
+      message: "Cannot read properties of undefined (reading 'ok')",
+    });
+  });
+
+  it("wraps a body-stream UND_ERR_SOCKET as YouPetActionRequestTransportError", async () => {
+    await expect(
+      rejectClientList(async () =>
+        failingBodyResponse(Object.assign(new Error("terminated"), { code: "UND_ERR_SOCKET" })),
+      ),
+    ).resolves.toBeInstanceOf(YouPetActionRequestTransportError);
+  });
+
+  it("does not wrap caller AbortError as transport", async () => {
+    const error = await rejectClientList(async () => {
+      throw new DOMException("The operation was aborted.", "AbortError");
+    });
+    expect(error).toBeInstanceOf(DOMException);
+    expect(error).not.toBeInstanceOf(YouPetActionRequestTransportError);
+    expect(error).toMatchObject({ name: "AbortError" });
+  });
+
+  it("does not wrap a message-only fetch-failed programming error as transport", async () => {
+    const error = await rejectClientList(async () => {
+      throw new Error("fetch failed while building request headers");
+    });
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(YouPetActionRequestTransportError);
+    expect(error).toMatchObject({
+      message: "fetch failed while building request headers",
+    });
+  });
+
+  it("does not wrap a bare TypeError fetch failed without a transport cause", async () => {
+    const error = await rejectClientList(async () => {
+      throw new TypeError("fetch failed");
+    });
+    expect(error).toBeInstanceOf(TypeError);
+    expect(error).not.toBeInstanceOf(YouPetActionRequestTransportError);
+  });
+
+  it.each([
+    {
+      name: "structured UND_ERR_INVALID_ARG",
+      fetchFn: async () => {
+        throw Object.assign(new TypeError("invalid argument"), { code: "UND_ERR_INVALID_ARG" });
+      },
+      expected: { name: "TypeError" },
+    },
+    {
+      name: "message-only UND_ERR_INVALID_ARG",
+      fetchFn: async () => {
+        throw new Error("Request failed with UND_ERR_INVALID_ARG");
+      },
+      expected: { message: "Request failed with UND_ERR_INVALID_ARG" },
+    },
+  ])("does not wrap $name as transport", async ({ fetchFn, expected }) => {
+    const error = await rejectClientList(fetchFn);
+    expect(error).not.toBeInstanceOf(YouPetActionRequestTransportError);
+    expect(error).toMatchObject(expected);
   });
 });
 
@@ -680,7 +797,7 @@ describe("YouPet ActionRequest dispatcher", () => {
     const requestsBeforeRetry = targetRequests.length;
     const retried = await dispatcher.dispatchOnce();
 
-    expect(targetRequests.slice(requestsBeforeRetry)).toEqual([undefined, "cursor-2"]);
+    expect(targetRequests.slice(requestsBeforeRetry)).toEqual([undefined, "cursor-2", "cursor-2"]);
     expect(retried.succeeded).toBe(1);
   });
 
@@ -797,7 +914,722 @@ describe("YouPet ActionRequest dispatcher", () => {
     });
 
     expect(third).toMatchObject({ claimed: 1, succeeded: 1, errored: 0 });
-    expect(thirdRequests).toEqual([undefined, "cursor-200"]);
+    expect(thirdRequests).toEqual([undefined, "cursor-200", "cursor-200"]);
+  });
+
+  it("reconciles a stale completed frontier after clear failure and still drains later backlog", async () => {
+    const env = createYouPetTempStateEnv();
+    const executed = new Set<string>();
+    const executeMutation = vi.fn(async (params: { envelope: YouPetActionRequestEnvelope }) => {
+      const id = params.envelope.action_request.id;
+      if (executed.has(id)) {
+        throw new Error(`duplicate mutation for ${id}`);
+      }
+      executed.add(id);
+      return { kind: "succeeded" as const, result: { outcome_code: "ok" } };
+    });
+    const initial = Array.from({ length: 201 }, (_, index) =>
+      createEnvelope({ requestId: nthUuid(80_000 + index) }),
+    );
+    const later = Array.from({ length: 250 }, (_, index) =>
+      createEnvelope({ requestId: nthUuid(81_000 + index) }),
+    );
+    const catalog = createNewestFirstCatalog(initial);
+    let core = new FakeActionRequestCore(initial[0]!, {
+      listPages: { "approved:not_started": [initial] },
+    });
+    const client = {
+      async list(params: { approvalState: string; executionState: string; cursor?: string }) {
+        if (params.approvalState !== "approved" || params.executionState !== "not_started") {
+          return { items: [], nextCursor: null };
+        }
+        return catalog.list(params.cursor);
+      },
+      async get(actionRequestId: string) {
+        return await core.get(actionRequestId);
+      },
+      async claimExecution(params: Parameters<YouPetActionRequestClient["claimExecution"]>[0]) {
+        return await core.claimExecution(params);
+      },
+      async updateExecution(params: Parameters<YouPetActionRequestClient["updateExecution"]>[0]) {
+        const updated = await core.updateExecution(params);
+        if (params.update.state === "succeeded" || params.update.state === "failed") {
+          catalog.remove(params.actionRequestId ?? updated.action_request.id);
+        }
+        return updated;
+      },
+    };
+
+    const first = await new YouPetActionRequestDispatcher({
+      client,
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      workerId: "worker-a",
+      executeMutation,
+      cursorStore: createFaultingCursorStore(
+        { clear: ["approved:not_started"] },
+        { delegate: createTestCursorStore(env), once: true },
+      ),
+    }).dispatchOnce();
+
+    expect(first).toMatchObject({ succeeded: 201, errored: 1 });
+    expect(executed.size).toBe(201);
+
+    catalog.prepend(later);
+    core = new FakeActionRequestCore(later[0]!, {
+      listPages: { "approved:not_started": [later] },
+    });
+    resetPluginStateStoreForTests();
+
+    const second = await new YouPetActionRequestDispatcher({
+      client,
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      workerId: "worker-a",
+      executeMutation,
+      cursorStore: createTestCursorStore(env),
+    }).dispatchOnce();
+
+    expect(second).toMatchObject({ succeeded: 250, errored: 0, conflicted: 0 });
+    expect(executed.size).toBe(451);
+    expect(executeMutation).toHaveBeenCalledTimes(451);
+  });
+
+  it("clears an authoritative invalid_cursor and continues from the current head frontier", async () => {
+    const env = createYouPetTempStateEnv();
+    const cursorStore = createTestCursorStore(env);
+    cursorStore.save({
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      approvalState: "approved",
+      executionState: "not_started",
+      nextCursor: "invalid-cursor",
+    });
+    const head = createEnvelope({ requestId: nthUuid(82_000) });
+    const deep = createEnvelope({ requestId: nthUuid(82_010) });
+    const queued = createEnvelope({
+      requestId: nthUuid(82_001),
+      executionState: "queued",
+      rowVersion: 2,
+    });
+    const headCore = new FakeActionRequestCore(head);
+    const deepCore = new FakeActionRequestCore(deep);
+    const queuedCore = new FakeActionRequestCore(queued);
+    const probeLimits: Array<number | undefined> = [];
+    const result = await new YouPetActionRequestDispatcher({
+      client: createInvalidCursorHealClient({
+        head,
+        deep,
+        queued,
+        headCore,
+        deepCore,
+        queuedCore,
+        probeLimits,
+      }),
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      workerId: "worker-a",
+      executeMutation: executeSuccessfulMutation,
+      cursorStore,
+    }).dispatchOnce();
+
+    expect(result).toMatchObject({ succeeded: 3, errored: 0, conflicted: 0 });
+    expect(queuedCore.claims).toHaveLength(1);
+    expect(headCore.claims).toHaveLength(1);
+    expect(deepCore.claims).toHaveLength(1);
+    expect(probeLimits).toEqual([1]);
+    expect(
+      cursorStore.load({
+        tenantId: TENANT_ID,
+        actorId: ACTOR_ID,
+        approvalState: "approved",
+        executionState: "not_started",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not reload an invalid_cursor after SQLite reopen", async () => {
+    const env = createYouPetTempStateEnv();
+    const cursorStore = createTestCursorStore(env);
+    cursorStore.save({
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      approvalState: "approved",
+      executionState: "not_started",
+      nextCursor: "invalid-cursor",
+    });
+    const head = createEnvelope({ requestId: nthUuid(82_100) });
+    const deep = createEnvelope({ requestId: nthUuid(82_110) });
+    const queued = createEnvelope({
+      requestId: nthUuid(82_101),
+      executionState: "queued",
+      rowVersion: 2,
+    });
+    await new YouPetActionRequestDispatcher({
+      client: createInvalidCursorHealClient({
+        head,
+        deep,
+        queued,
+        headCore: new FakeActionRequestCore(head),
+        deepCore: new FakeActionRequestCore(deep),
+        queuedCore: new FakeActionRequestCore(queued),
+      }),
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      workerId: "worker-a",
+      executeMutation: executeSuccessfulMutation,
+      cursorStore,
+    }).dispatchOnce();
+
+    resetPluginStateStoreForTests();
+    const reopened = createTestCursorStore(env);
+    expect(
+      reopened.load({
+        tenantId: TENANT_ID,
+        actorId: ACTOR_ID,
+        approvalState: "approved",
+        executionState: "not_started",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("drains older backlog after invalid_cursor heal while newer head pages keep arriving", async () => {
+    const env = createYouPetTempStateEnv();
+    const cursorStore = createTestCursorStore(env);
+    cursorStore.save({
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      approvalState: "approved",
+      executionState: "not_started",
+      nextCursor: "invalid-cursor",
+    });
+    const older = Array.from({ length: 10 }, (_, index) =>
+      createEnvelope({ requestId: nthUuid(84_000 + index) }),
+    );
+    const newer = Array.from({ length: 250 }, (_, index) =>
+      createEnvelope({ requestId: nthUuid(84_100 + index) }),
+    );
+    const catalog = createNewestFirstCatalog(older);
+    catalog.prepend(newer);
+    const all = [...newer, ...older];
+    const core = new FakeActionRequestCore(all[0]!, {
+      listPages: { "approved:not_started": [all] },
+    });
+    const executed = new Set<string>();
+    const result = await new YouPetActionRequestDispatcher({
+      client: {
+        async list(params: {
+          approvalState: string;
+          executionState: string;
+          cursor?: string;
+          limit?: number;
+        }) {
+          if (params.cursor === "invalid-cursor") {
+            expect(params.limit).toBe(1);
+            throw new YouPetActionRequestCoreError({
+              status: 422,
+              path: "/api/v1/action-requests",
+              code: "invalid_cursor",
+            });
+          }
+          if (params.approvalState !== "approved" || params.executionState !== "not_started") {
+            return { items: [], nextCursor: null };
+          }
+          return catalog.list(params.cursor);
+        },
+        async get(actionRequestId: string) {
+          return await core.get(actionRequestId);
+        },
+        async claimExecution(params: Parameters<YouPetActionRequestClient["claimExecution"]>[0]) {
+          return await core.claimExecution(params);
+        },
+        async updateExecution(params: Parameters<YouPetActionRequestClient["updateExecution"]>[0]) {
+          const updated = await core.updateExecution(params);
+          if (params.update.state === "succeeded" || params.update.state === "failed") {
+            catalog.remove(params.actionRequestId ?? updated.action_request.id);
+            executed.add(params.actionRequestId ?? updated.action_request.id);
+          }
+          return updated;
+        },
+      },
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      workerId: "worker-a",
+      executeMutation: executeSuccessfulMutation,
+      cursorStore,
+    }).dispatchOnce();
+
+    expect(result).toMatchObject({ succeeded: 260, errored: 0 });
+    for (const item of older) {
+      expect(executed.has(item.action_request.id)).toBe(true);
+    }
+  });
+
+  it("stops only the faulting slice when invalid_cursor clear fails", async () => {
+    const env = createYouPetTempStateEnv();
+    const durable = createTestCursorStore(env);
+    durable.save({
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      approvalState: "approved",
+      executionState: "not_started",
+      nextCursor: "invalid-cursor",
+    });
+    const head = createEnvelope({ requestId: nthUuid(82_200) });
+    const queued = createEnvelope({
+      requestId: nthUuid(82_201),
+      executionState: "queued",
+      rowVersion: 2,
+    });
+    const headCore = new FakeActionRequestCore(head);
+    const queuedCore = new FakeActionRequestCore(queued);
+    const logger = { error: vi.fn() };
+    const result = await new YouPetActionRequestDispatcher({
+      client: createInvalidCursorHealClient({
+        head,
+        deep: createEnvelope({ requestId: nthUuid(82_210) }),
+        queued,
+        headCore,
+        deepCore: new FakeActionRequestCore(createEnvelope({ requestId: nthUuid(82_211) })),
+        queuedCore,
+      }),
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      workerId: "worker-a",
+      executeMutation: executeSuccessfulMutation,
+      cursorStore: createFaultingCursorStore(
+        { clear: ["approved:not_started"] },
+        { delegate: durable, once: true },
+      ),
+      logger,
+    }).dispatchOnce();
+
+    expect(result).toMatchObject({ succeeded: 2, errored: 1 });
+    expect(queuedCore.claims).toHaveLength(1);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "ActionRequest cursor slice approved/not_started failed: cursor clear failed",
+      ),
+    );
+    expect(
+      durable.load({
+        tenantId: TENANT_ID,
+        actorId: ACTOR_ID,
+        approvalState: "approved",
+        executionState: "not_started",
+      }),
+    ).toBe("invalid-cursor");
+  });
+
+  it("does not clear a durable cursor for an ordinary 422 probe", async () => {
+    const env = createYouPetTempStateEnv();
+    const cursorStore = createTestCursorStore(env);
+    cursorStore.save({
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      approvalState: "approved",
+      executionState: "not_started",
+      nextCursor: "saved-cursor",
+    });
+    const queued = createEnvelope({
+      requestId: nthUuid(82_300),
+      executionState: "queued",
+      rowVersion: 2,
+    });
+    const queuedCore = new FakeActionRequestCore(queued);
+    const logger = { error: vi.fn() };
+    const result = await new YouPetActionRequestDispatcher({
+      client: {
+        async list(params: { approvalState: string; executionState: string; cursor?: string }) {
+          if (params.cursor === "saved-cursor") {
+            throw new YouPetActionRequestCoreError({
+              status: 422,
+              path: "/api/v1/action-requests",
+              code: "contract_validation_failed",
+            });
+          }
+          if (params.approvalState === "approved" && params.executionState === "queued") {
+            return { items: [structuredClone(queued)], nextCursor: null };
+          }
+          if (params.approvalState === "approved" && params.executionState === "not_started") {
+            return { items: [], nextCursor: "saved-cursor" };
+          }
+          return { items: [], nextCursor: null };
+        },
+        async get(actionRequestId: string) {
+          return await queuedCore.get(actionRequestId);
+        },
+        async claimExecution(params: Parameters<YouPetActionRequestClient["claimExecution"]>[0]) {
+          return await queuedCore.claimExecution(params);
+        },
+        async updateExecution(params: Parameters<YouPetActionRequestClient["updateExecution"]>[0]) {
+          return await queuedCore.updateExecution(params);
+        },
+      },
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      workerId: "worker-a",
+      executeMutation: executeSuccessfulMutation,
+      cursorStore,
+      logger,
+    }).dispatchOnce();
+
+    expect(result.errored).toBe(1);
+    expect(queuedCore.claims).toHaveLength(1);
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("cursor probe failed"));
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("422"));
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining("contract_validation_failed"),
+    );
+    expect(
+      cursorStore.load({
+        tenantId: TENANT_ID,
+        actorId: ACTOR_ID,
+        approvalState: "approved",
+        executionState: "not_started",
+      }),
+    ).toBe("saved-cursor");
+  });
+
+  it("isolates a probe 5xx without clearing the durable cursor", async () => {
+    const env = createYouPetTempStateEnv();
+    const cursorStore = createTestCursorStore(env);
+    cursorStore.save({
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      approvalState: "approved",
+      executionState: "not_started",
+      nextCursor: "saved-cursor",
+    });
+    const queued = createEnvelope({
+      requestId: nthUuid(82_400),
+      executionState: "queued",
+      rowVersion: 2,
+    });
+    const queuedCore = new FakeActionRequestCore(queued);
+    const logger = { error: vi.fn() };
+    const result = await new YouPetActionRequestDispatcher({
+      client: {
+        async list(params: { approvalState: string; executionState: string; cursor?: string }) {
+          if (params.cursor === "saved-cursor") {
+            throw new YouPetActionRequestCoreError({
+              status: 503,
+              path: "/api/v1/action-requests",
+              code: "upstream_unavailable",
+            });
+          }
+          if (params.approvalState === "approved" && params.executionState === "queued") {
+            return { items: [structuredClone(queued)], nextCursor: null };
+          }
+          if (params.approvalState === "approved" && params.executionState === "not_started") {
+            return { items: [], nextCursor: "saved-cursor" };
+          }
+          return { items: [], nextCursor: null };
+        },
+        async get(actionRequestId: string) {
+          return await queuedCore.get(actionRequestId);
+        },
+        async claimExecution(params: Parameters<YouPetActionRequestClient["claimExecution"]>[0]) {
+          return await queuedCore.claimExecution(params);
+        },
+        async updateExecution(params: Parameters<YouPetActionRequestClient["updateExecution"]>[0]) {
+          return await queuedCore.updateExecution(params);
+        },
+      },
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      workerId: "worker-a",
+      executeMutation: executeSuccessfulMutation,
+      cursorStore,
+      logger,
+    }).dispatchOnce();
+
+    expect(result.errored).toBe(1);
+    expect(queuedCore.claims).toHaveLength(1);
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("503"));
+    expect(
+      cursorStore.load({
+        tenantId: TENANT_ID,
+        actorId: ACTOR_ID,
+        approvalState: "approved",
+        executionState: "not_started",
+      }),
+    ).toBe("saved-cursor");
+  });
+
+  it.each([
+    { status: 401, code: "unauthorized" },
+    { status: 403, code: "forbidden" },
+    { status: 429, code: "rate_limited" },
+  ])("aborts the dispatch cycle on probe $status $code", async ({ status, code }) => {
+    const harness = createLaterSliceProbeHarness({
+      laterRequestId: 84_000 + status,
+      probeError: new YouPetActionRequestCoreError({
+        status,
+        path: "/api/v1/action-requests",
+        code,
+      }),
+    });
+
+    await expect(harness.dispatcher.dispatchOnce()).rejects.toMatchObject({
+      name: "YouPetActionRequestCoreError",
+      status,
+      code,
+    });
+    expect(harness.laterCore.claims).toHaveLength(0);
+    expect(harness.logger.error).not.toHaveBeenCalled();
+    expect(
+      harness.cursorStore.load({
+        tenantId: TENANT_ID,
+        actorId: ACTOR_ID,
+        approvalState: "approved",
+        executionState: "running",
+      }),
+    ).toBe("saved-cursor");
+  });
+
+  it("isolates a recognized probe transport error without clearing the durable cursor", async () => {
+    const harness = createLaterSliceProbeHarness({
+      laterRequestId: 84_503,
+      probeError: new YouPetActionRequestTransportError({
+        cause: Object.assign(new TypeError("fetch failed"), { code: "ECONNRESET" }),
+        path: "/api/v1/action-requests",
+      }),
+    });
+
+    const result = await harness.dispatcher.dispatchOnce();
+
+    expect(result).toMatchObject({ succeeded: 1, errored: 1 });
+    expect(harness.laterCore.claims).toHaveLength(1);
+    expect(harness.logger.error).toHaveBeenCalledWith(
+      expect.stringContaining("cursor probe failed"),
+    );
+    expect(
+      harness.cursorStore.load({
+        tenantId: TENANT_ID,
+        actorId: ACTOR_ID,
+        approvalState: "approved",
+        executionState: "running",
+      }),
+    ).toBe("saved-cursor");
+  });
+
+  it("aborts the dispatch cycle on an unexpected probe TypeError", async () => {
+    const harness = createLaterSliceProbeHarness({
+      laterRequestId: 84_600,
+      probeError: new TypeError("Cannot read properties of undefined (reading 'items')"),
+    });
+
+    await expect(harness.dispatcher.dispatchOnce()).rejects.toBeInstanceOf(TypeError);
+    expect(harness.laterCore.claims).toHaveLength(0);
+    expect(harness.logger.error).not.toHaveBeenCalled();
+    expect(
+      harness.cursorStore.load({
+        tenantId: TENANT_ID,
+        actorId: ACTOR_ID,
+        approvalState: "approved",
+        executionState: "running",
+      }),
+    ).toBe("saved-cursor");
+  });
+
+  it("aborts the dispatch cycle on an unexpected probe Error", async () => {
+    const harness = createLaterSliceProbeHarness({
+      laterRequestId: 84_601,
+      probeError: new Error("unexpected probe boom"),
+    });
+
+    await expect(harness.dispatcher.dispatchOnce()).rejects.toThrow(/unexpected probe boom/u);
+    expect(harness.laterCore.claims).toHaveLength(0);
+    expect(
+      harness.cursorStore.load({
+        tenantId: TENANT_ID,
+        actorId: ACTOR_ID,
+        approvalState: "approved",
+        executionState: "running",
+      }),
+    ).toBe("saved-cursor");
+  });
+
+  it("wraps a real-client fetch transport failure as slice-local without aborting later slices", async () => {
+    const harness = createRealClientProbeHarness({
+      laterRequestId: 84_700,
+      onProbe: async () => {
+        throw Object.assign(new TypeError("fetch failed"), {
+          cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }),
+        });
+      },
+    });
+
+    const result = await harness.dispatcher.dispatchOnce();
+
+    expect(result).toMatchObject({ succeeded: 1, errored: 1 });
+    expect(harness.laterCore.claims).toHaveLength(1);
+    expect(harness.logger.error).toHaveBeenCalledWith(
+      expect.stringContaining("cursor probe failed"),
+    );
+    expectSavedRunningCursor(harness.cursorStore);
+  });
+
+  it("isolates a body-stream UND_ERR_SOCKET probe without clearing the durable cursor", async () => {
+    const harness = createRealClientProbeHarness({
+      laterRequestId: 84_710,
+      onProbe: async () =>
+        failingBodyResponse(Object.assign(new Error("terminated"), { code: "UND_ERR_SOCKET" })),
+    });
+
+    const result = await harness.dispatcher.dispatchOnce();
+
+    expect(result).toMatchObject({ succeeded: 1, errored: 1 });
+    expect(harness.laterCore.claims).toHaveLength(1);
+    expect(harness.logger.error).toHaveBeenCalledWith(
+      expect.stringContaining("cursor probe failed"),
+    );
+    expectSavedRunningCursor(harness.cursorStore);
+  });
+
+  it("aborts the dispatch cycle on a caller AbortError probe", async () => {
+    const harness = createRealClientProbeHarness({
+      laterRequestId: 84_720,
+      onProbe: async () => {
+        throw new DOMException("The operation was aborted.", "AbortError");
+      },
+    });
+
+    await expect(harness.dispatcher.dispatchOnce()).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    expect(harness.laterCore.claims).toHaveLength(0);
+    expect(harness.logger.error).not.toHaveBeenCalled();
+    expectSavedRunningCursor(harness.cursorStore);
+  });
+
+  it("aborts the dispatch cycle on a message-only fetch-failed programming probe", async () => {
+    const harness = createRealClientProbeHarness({
+      laterRequestId: 84_730,
+      onProbe: async () => {
+        throw new Error("fetch failed while building request headers");
+      },
+    });
+
+    await expect(harness.dispatcher.dispatchOnce()).rejects.toThrow(
+      /fetch failed while building request headers/u,
+    );
+    expect(harness.laterCore.claims).toHaveLength(0);
+    expect(harness.logger.error).not.toHaveBeenCalled();
+    expectSavedRunningCursor(harness.cursorStore);
+  });
+
+  it.each([
+    {
+      name: "structured UND_ERR_INVALID_ARG",
+      laterRequestId: 84_740,
+      onProbe: async () => {
+        throw Object.assign(new TypeError("invalid argument"), { code: "UND_ERR_INVALID_ARG" });
+      },
+      expected: { name: "TypeError" },
+    },
+    {
+      name: "message-only UND_ERR_INVALID_ARG",
+      laterRequestId: 84_750,
+      onProbe: async () => {
+        throw new Error("Request failed with UND_ERR_INVALID_ARG");
+      },
+      expected: { message: "Request failed with UND_ERR_INVALID_ARG" },
+    },
+  ])(
+    "aborts the dispatch cycle on a $name probe",
+    async ({ laterRequestId, onProbe, expected }) => {
+      const harness = createRealClientProbeHarness({ laterRequestId, onProbe });
+
+      await expect(harness.dispatcher.dispatchOnce()).rejects.toMatchObject(expected);
+      expect(harness.laterCore.claims).toHaveLength(0);
+      expect(harness.logger.error).not.toHaveBeenCalled();
+      expectSavedRunningCursor(harness.cursorStore);
+    },
+  );
+
+  it("does not use an in-memory cursor when the durable store misses", async () => {
+    const env = createYouPetTempStateEnv();
+    const cursorStore = createTestCursorStore(env);
+    const valid = createEnvelope({ requestId: nthUuid(83_000) });
+    const validCore = new FakeActionRequestCore(valid);
+    const requests: Array<string | undefined> = [];
+    const client = createDeepBacklogClient(validCore, valid, requests);
+    const dispatcher = new YouPetActionRequestDispatcher({
+      client,
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      workerId: "worker-a",
+      executeMutation: executeSuccessfulMutation,
+      cursorStore,
+    });
+
+    const first = await dispatcher.dispatchOnce();
+    expect(first).toMatchObject({ succeeded: 0, errored: 0 });
+    expect(requests.at(-1)).toBe("cursor-199");
+
+    cursorStore.clear({
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      approvalState: "approved",
+      executionState: "not_started",
+    });
+    requests.length = 0;
+
+    const second = await dispatcher.dispatchOnce();
+    expect(second.errored).toBe(0);
+    expect(requests[0]).toBeUndefined();
+    expect(requests[1]).toBe("cursor-1");
+  });
+
+  it("isolates a cursor load fault and resumes the durable frontier after restart", async () => {
+    const env = createYouPetTempStateEnv();
+    const valid = createEnvelope({ requestId: nthUuid(83_100) });
+    const validCore = new FakeActionRequestCore(valid);
+    const durable = createTestCursorStore(env);
+
+    const firstRequests: Array<string | undefined> = [];
+    const first = await dispatchDeepBacklogOnce({
+      validCore,
+      valid,
+      requests: firstRequests,
+      cursorStore: durable,
+    });
+    expect(first).toMatchObject({ succeeded: 0, errored: 0 });
+
+    const faulting = createFaultingCursorStore(
+      { load: ["approved:not_started"] },
+      { delegate: durable, once: true },
+    );
+    const logger = { error: vi.fn() };
+    const second = await new YouPetActionRequestDispatcher({
+      client: createDeepBacklogClient(validCore, valid, []),
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      workerId: "worker-a",
+      executeMutation: executeSuccessfulMutation,
+      cursorStore: faulting,
+      logger,
+    }).dispatchOnce();
+    expect(second).toMatchObject({ errored: 1, succeeded: 0 });
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "ActionRequest cursor slice approved/not_started failed: cursor load failed",
+      ),
+    );
+
+    resetPluginStateStoreForTests();
+    const resumedRequests: Array<string | undefined> = [];
+    const third = await dispatchDeepBacklogOnce({
+      validCore,
+      valid,
+      requests: resumedRequests,
+      cursorStore: createTestCursorStore(env),
+    });
+    expect(third).toMatchObject({ claimed: 1, succeeded: 1, errored: 0 });
+    expect(resumedRequests[0]).toBeUndefined();
+    expect(resumedRequests).toContain("cursor-200");
   });
 
   it("bounds full-page backlog memory and resumes after the page budget", async () => {
@@ -1745,6 +2577,93 @@ describe("YouPet ActionRequest dispatcher", () => {
     );
   });
 
+  it("composes FakeActionRequestCore worker-owned rejection through dispatcher workerless fallback", async () => {
+    const workerNow = new Date("2026-08-10T01:21:00Z");
+    const queued = createEnvelope({
+      requestId: nthUuid(20_500),
+      executionState: "queued",
+      rowVersion: 2,
+      policyExpiresAt: "2026-08-10T01:25:00Z",
+    });
+    const latestRunning = createEnvelope({
+      requestId: nthUuid(20_500),
+      executionState: "running",
+      rowVersion: 4,
+      executionClaimOwnerId: "worker-a",
+      executionClaimLeaseExpiresAt: "2026-08-10T01:20:00Z",
+      policyExpiresAt: "2026-08-10T01:05:00Z",
+    });
+    const valid = createEnvelope({ requestId: nthUuid(20_501) });
+    const recoveryCore = new FakeActionRequestCore(latestRunning, { now: () => workerNow });
+    const validCore = new FakeActionRequestCore(valid, { now: () => workerNow });
+    const executeMutation = vi.fn(async () => ({
+      kind: "succeeded" as const,
+      result: { outcome_code: "task_escalated" },
+    }));
+    const dispatcher = new YouPetActionRequestDispatcher({
+      client: {
+        async list(params) {
+          if (params.approvalState === "approved" && params.executionState === "queued") {
+            return { items: [structuredClone(queued)], nextCursor: null };
+          }
+          if (params.approvalState === "approved" && params.executionState === "not_started") {
+            return { items: [structuredClone(valid)], nextCursor: null };
+          }
+          return { items: [], nextCursor: null };
+        },
+        async get(actionRequestId) {
+          if (actionRequestId === queued.action_request.id) {
+            return await recoveryCore.get(actionRequestId);
+          }
+          return await validCore.get(actionRequestId);
+        },
+        async claimExecution(params) {
+          if (params.actionRequestId === queued.action_request.id) {
+            throw new YouPetActionRequestCoreError({
+              status: 409,
+              path: "/execution-claim",
+              code: "execution_authorization_expired",
+            });
+          }
+          return await validCore.claimExecution(params);
+        },
+        async updateExecution(params) {
+          if (params.actionRequestId === queued.action_request.id) {
+            return await recoveryCore.updateExecution(params);
+          }
+          return await validCore.updateExecution(params);
+        },
+      },
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      workerId: "worker-a",
+      executeMutation,
+      now: () => workerNow,
+    });
+
+    const result = await dispatcher.dispatchOnce();
+
+    expect(result).toMatchObject({
+      failed: 1,
+      claimed: 1,
+      succeeded: 1,
+      conflicted: 0,
+      errored: 0,
+    });
+    expect(recoveryCore.updateAttempts).toHaveLength(2);
+    expect(recoveryCore.updateAttempts[0]?.update.worker_id).toBe("worker-a");
+    expect(recoveryCore.updateAttempts[1]?.update).not.toHaveProperty("worker_id");
+    expect(recoveryCore.updateAttempts[0]?.update.expected_row_version).toBe(4);
+    expect(recoveryCore.updateAttempts[1]?.update.expected_row_version).toBe(4);
+    expect(recoveryCore.updateAttempts[0]?.idempotencyKey).not.toBe(
+      recoveryCore.updateAttempts[1]?.idempotencyKey,
+    );
+    expect(executeMutation).toHaveBeenCalledOnce();
+    expect(executeMutation.mock.calls[0]?.[0]?.envelope.action_request.id).toBe(
+      valid.action_request.id,
+    );
+  });
+
   it("leaves an expired running request alone when another worker still owns the active lease", async () => {
     const currentNow = new Date("2026-08-10T01:10:00Z");
     const foreignRunning = createEnvelope({
@@ -2137,6 +3056,259 @@ describe("FakeActionRequestCore policy-expired recovery contract", () => {
     },
   );
 });
+
+function createLaterSliceProbeHarness(options: { laterRequestId: number; probeError: unknown }) {
+  const env = createYouPetTempStateEnv();
+  const cursorStore = createTestCursorStore(env);
+  cursorStore.save({
+    tenantId: TENANT_ID,
+    actorId: ACTOR_ID,
+    approvalState: "approved",
+    executionState: "running",
+    nextCursor: "saved-cursor",
+  });
+  const later = createEnvelope({
+    requestId: nthUuid(options.laterRequestId),
+    executionState: "queued",
+    rowVersion: 2,
+  });
+  const laterCore = new FakeActionRequestCore(later);
+  const logger = { error: vi.fn() };
+  return {
+    cursorStore,
+    laterCore,
+    logger,
+    dispatcher: new YouPetActionRequestDispatcher({
+      client: {
+        async list(params: { approvalState: string; executionState: string; cursor?: string }) {
+          if (params.cursor === "saved-cursor") {
+            throw options.probeError;
+          }
+          if (params.approvalState === "approved" && params.executionState === "queued") {
+            return { items: [structuredClone(later)], nextCursor: null };
+          }
+          if (params.approvalState === "approved" && params.executionState === "running") {
+            return { items: [], nextCursor: "saved-cursor" };
+          }
+          return { items: [], nextCursor: null };
+        },
+        async get(actionRequestId: string) {
+          return await laterCore.get(actionRequestId);
+        },
+        async claimExecution(params: Parameters<YouPetActionRequestClient["claimExecution"]>[0]) {
+          return await laterCore.claimExecution(params);
+        },
+        async updateExecution(params: Parameters<YouPetActionRequestClient["updateExecution"]>[0]) {
+          return await laterCore.updateExecution(params);
+        },
+      },
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      workerId: "worker-a",
+      executeMutation: executeSuccessfulMutation,
+      cursorStore,
+      logger,
+    }),
+  };
+}
+
+function createActionRequestClient(
+  fetchFn: ConstructorParameters<typeof YouPetActionRequestClient>[0]["fetchFn"],
+) {
+  return new YouPetActionRequestClient({
+    coreBaseUrl: "https://core.example.com",
+    serviceToken: "svc-token",
+    actorId: ACTOR_ID,
+    fetchFn,
+  });
+}
+
+async function rejectClientList(
+  fetchFn: NonNullable<ConstructorParameters<typeof YouPetActionRequestClient>[0]["fetchFn"]>,
+): Promise<unknown> {
+  return await createActionRequestClient(fetchFn)
+    .list({
+      tenantId: TENANT_ID,
+      approvalState: "approved",
+      executionState: "not_started",
+    })
+    .then(
+      () => undefined,
+      (cause: unknown) => cause,
+    );
+}
+
+function failingBodyResponse(error: Error): Response {
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.error(error);
+      },
+    }),
+    { status: 200, headers: { "content-type": "application/json" } },
+  );
+}
+
+function expectSavedRunningCursor(cursorStore: YouPetActionRequestCursorStore): void {
+  expect(
+    cursorStore.load({
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      approvalState: "approved",
+      executionState: "running",
+    }),
+  ).toBe("saved-cursor");
+}
+
+function createRealClientProbeHarness(options: {
+  laterRequestId: number;
+  onProbe: () => Promise<Response>;
+}) {
+  const env = createYouPetTempStateEnv();
+  const cursorStore = createTestCursorStore(env);
+  cursorStore.save({
+    tenantId: TENANT_ID,
+    actorId: ACTOR_ID,
+    approvalState: "approved",
+    executionState: "running",
+    nextCursor: "saved-cursor",
+  });
+  const later = createEnvelope({
+    requestId: nthUuid(options.laterRequestId),
+    executionState: "queued",
+    rowVersion: 2,
+  });
+  const laterCore = new FakeActionRequestCore(later);
+  const actionRequests = createActionRequestClient(async (input) => {
+    const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
+    if (url.searchParams.get("cursor") === "saved-cursor") {
+      return await options.onProbe();
+    }
+    if (
+      url.searchParams.get("approval_state") === "approved" &&
+      url.searchParams.get("execution_state") === "queued"
+    ) {
+      return jsonResponse({ items: [later], count: 1, next_cursor: null });
+    }
+    if (
+      url.searchParams.get("approval_state") === "approved" &&
+      url.searchParams.get("execution_state") === "running"
+    ) {
+      return jsonResponse({ items: [], count: 0, next_cursor: "saved-cursor" });
+    }
+    return jsonResponse({ items: [], count: 0, next_cursor: null });
+  });
+  const logger = { error: vi.fn() };
+  return {
+    cursorStore,
+    laterCore,
+    logger,
+    dispatcher: new YouPetActionRequestDispatcher({
+      client: {
+        list: async (params) => await actionRequests.list(params),
+        async get(actionRequestId: string) {
+          return await laterCore.get(actionRequestId);
+        },
+        async claimExecution(params: Parameters<YouPetActionRequestClient["claimExecution"]>[0]) {
+          return await laterCore.claimExecution(params);
+        },
+        async updateExecution(params: Parameters<YouPetActionRequestClient["updateExecution"]>[0]) {
+          return await laterCore.updateExecution(params);
+        },
+      },
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      workerId: "worker-a",
+      executeMutation: executeSuccessfulMutation,
+      cursorStore,
+      logger,
+    }),
+  };
+}
+
+function createInvalidCursorHealClient(options: {
+  head: YouPetActionRequestEnvelope;
+  deep: YouPetActionRequestEnvelope;
+  queued: YouPetActionRequestEnvelope;
+  headCore: InstanceType<typeof FakeActionRequestCore>;
+  deepCore: InstanceType<typeof FakeActionRequestCore>;
+  queuedCore: InstanceType<typeof FakeActionRequestCore>;
+  probeLimits?: Array<number | undefined>;
+}) {
+  const coreFor = (actionRequestId: string) => {
+    if (actionRequestId === options.head.action_request.id) {
+      return options.headCore;
+    }
+    if (actionRequestId === options.deep.action_request.id) {
+      return options.deepCore;
+    }
+    return options.queuedCore;
+  };
+  return {
+    async list(params: {
+      approvalState: string;
+      executionState: string;
+      cursor?: string;
+      limit?: number;
+    }) {
+      if (params.cursor === "invalid-cursor") {
+        options.probeLimits?.push(params.limit);
+        throw new YouPetActionRequestCoreError({
+          status: 422,
+          path: "/api/v1/action-requests",
+          code: "invalid_cursor",
+        });
+      }
+      if (params.approvalState === "approved" && params.executionState === "queued") {
+        return { items: [structuredClone(options.queued)], nextCursor: null };
+      }
+      if (params.approvalState === "approved" && params.executionState === "not_started") {
+        if (params.cursor === "cursor-deep") {
+          return { items: [structuredClone(options.deep)], nextCursor: null };
+        }
+        return { items: [structuredClone(options.head)], nextCursor: "cursor-deep" };
+      }
+      return { items: [], nextCursor: null };
+    },
+    async get(actionRequestId: string) {
+      return await coreFor(actionRequestId).get(actionRequestId);
+    },
+    async claimExecution(params: Parameters<YouPetActionRequestClient["claimExecution"]>[0]) {
+      return await coreFor(params.actionRequestId).claimExecution(params);
+    },
+    async updateExecution(params: Parameters<YouPetActionRequestClient["updateExecution"]>[0]) {
+      return await coreFor(params.actionRequestId).updateExecution(params);
+    },
+  };
+}
+
+function createNewestFirstCatalog(initial: YouPetActionRequestEnvelope[]) {
+  let highSeq = initial.length;
+  let items = initial.map((item, index) => ({ seq: highSeq - index, item }));
+  return {
+    prepend(next: YouPetActionRequestEnvelope[]) {
+      highSeq += next.length;
+      items = [...next.map((item, index) => ({ seq: highSeq - index, item })), ...items];
+    },
+    remove(actionRequestId: string) {
+      items = items.filter((entry) => entry.item.action_request.id !== actionRequestId);
+    },
+    list(cursor?: string): CursorListPage {
+      const afterSeq = cursor
+        ? Number(cursor.replace(/^after-seq:/u, ""))
+        : Number.POSITIVE_INFINITY;
+      const eligible = items
+        .filter((entry) => entry.seq < afterSeq)
+        .toSorted((left, right) => right.seq - left.seq);
+      const page = eligible.slice(0, 200);
+      const last = page.at(-1);
+      return {
+        items: page.map((entry) => structuredClone(entry.item)),
+        nextCursor: eligible.length > page.length && last ? `after-seq:${last.seq}` : null,
+      };
+    },
+  };
+}
 
 function createEnvelope(
   overrides: {

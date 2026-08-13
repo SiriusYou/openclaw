@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   YouPetActionRequestCursorStoreError,
+  toYouPetActionRequestCursorKey,
   type YouPetActionRequestCursorStore,
 } from "./action-request-cursor-store.js";
 
@@ -156,6 +157,39 @@ export class YouPetActionRequestCoreError extends Error {
   }
 }
 
+export class YouPetActionRequestCursorProbeError extends Error {
+  override readonly cause: unknown;
+  readonly status: number | undefined;
+  readonly code: string | undefined;
+  readonly sliceKey: string;
+
+  constructor(params: { cause: unknown; sliceKey: string; status?: number; code?: string }) {
+    const suffix = [params.status !== undefined ? String(params.status) : undefined, params.code]
+      .filter((part): part is string => Boolean(part))
+      .join(" ");
+    super(
+      `YouPet ActionRequest cursor probe failed for ${params.sliceKey}${suffix ? ` ${suffix}` : ""}`,
+    );
+    this.name = "YouPetActionRequestCursorProbeError";
+    this.cause = params.cause;
+    this.status = params.status;
+    this.code = params.code;
+    this.sliceKey = params.sliceKey;
+  }
+}
+
+export class YouPetActionRequestTransportError extends Error {
+  override readonly cause: unknown;
+  readonly path: string;
+
+  constructor(params: { cause: unknown; path: string }) {
+    super(`YouPet ActionRequest transport failed ${params.path}`);
+    this.name = "YouPetActionRequestTransportError";
+    this.cause = params.cause;
+    this.path = params.path;
+  }
+}
+
 export class YouPetActionRequestClient {
   private readonly coreBaseUrl: string;
   private readonly serviceToken: string;
@@ -300,12 +334,22 @@ export class YouPetActionRequestClient {
     if (options.correlationId) {
       headers.set("X-Correlation-Id", options.correlationId);
     }
-    const response = await this.fetchFn(url, {
-      method: options.method,
-      headers,
-      body: options.body === undefined ? undefined : JSON.stringify(options.body),
-    });
-    const text = await response.text();
+    let response: Response;
+    try {
+      response = await this.fetchFn(url, {
+        method: options.method,
+        headers,
+        body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      });
+    } catch (error) {
+      throw wrapYouPetActionRequestTransportError(error, path);
+    }
+    let text: string;
+    try {
+      text = await response.text();
+    } catch (error) {
+      throw wrapYouPetActionRequestTransportError(error, path);
+    }
     const decoded = text.length > 0 ? parseJson(text) : undefined;
     if (!response.ok) {
       throw new YouPetActionRequestCoreError({
@@ -400,6 +444,7 @@ type YouPetActionRequestSliceKey =
   `${"approved" | "not_required"}:${YouPetActionRequestExecutionState}`;
 
 const ACTION_REQUEST_PAGE_LIMIT = 200;
+const ACTION_REQUEST_CURSOR_PROBE_LIMIT = 1;
 const ACTION_REQUEST_MAX_PAGES_PER_SLICE_PER_DISPATCH = 200;
 const ACTION_REQUEST_PAGE_NO_PROGRESS_LIMIT = 64;
 const EXECUTION_AUTHORIZATION_EXPIRED_CODE = "execution_authorization_expired";
@@ -462,7 +507,10 @@ export class YouPetActionRequestDispatcher {
             result,
           );
         } catch (error) {
-          if (error instanceof YouPetActionRequestCursorStoreError) {
+          if (
+            error instanceof YouPetActionRequestCursorStoreError ||
+            error instanceof YouPetActionRequestCursorProbeError
+          ) {
             result.errored += 1;
             this.logger?.error?.(
               `[youpet] ActionRequest cursor slice ${approvalState}/${executionState} failed: ${summarizeDispatchError(error)}`,
@@ -504,7 +552,7 @@ export class YouPetActionRequestDispatcher {
       return;
     }
 
-    let cursor = savedCursor ?? headPage.nextCursor;
+    let cursor = await this.resolveBacklogCursor(params, savedCursor, headPage.nextCursor);
     const seenBacklogCursors = new Set<string>([cursor]);
     let noProgressPages = 0;
     this.saveSliceCursor(params, cursor);
@@ -560,6 +608,63 @@ export class YouPetActionRequestDispatcher {
       });
     }
     return this.sliceCursors.get(sliceKey);
+  }
+
+  private async resolveBacklogCursor(
+    params: {
+      approvalState: "approved" | "not_required";
+      executionState: YouPetActionRequestExecutionState;
+    },
+    savedCursor: string | undefined,
+    headNextCursor: string,
+  ): Promise<string> {
+    if (!savedCursor) {
+      return headNextCursor;
+    }
+    let probe: YouPetActionRequestListPage;
+    try {
+      probe = await this.client.list({
+        tenantId: this.tenantId,
+        approvalState: params.approvalState,
+        executionState: params.executionState,
+        limit: ACTION_REQUEST_CURSOR_PROBE_LIMIT,
+        cursor: savedCursor,
+      });
+    } catch (error) {
+      if (isAuthoritativeInvalidCursorError(error)) {
+        this.clearSliceCursor(params);
+        return headNextCursor;
+      }
+      throw this.toSliceLocalProbeError(params, error);
+    }
+    if (probe.items.length === 0 && probe.nextCursor === null) {
+      this.clearSliceCursor(params);
+      return headNextCursor;
+    }
+    return savedCursor;
+  }
+
+  private toSliceLocalProbeError(
+    params: {
+      approvalState: "approved" | "not_required";
+      executionState: YouPetActionRequestExecutionState;
+    },
+    error: unknown,
+  ): YouPetActionRequestCursorProbeError | unknown {
+    if (!isSliceLocalProbeFailure(error)) {
+      return error;
+    }
+    return new YouPetActionRequestCursorProbeError({
+      cause: error,
+      sliceKey: toYouPetActionRequestCursorKey({
+        tenantId: this.tenantId,
+        actorId: this.actorId,
+        approvalState: params.approvalState,
+        executionState: params.executionState,
+      }),
+      status: error instanceof YouPetActionRequestCoreError ? error.status : undefined,
+      code: error instanceof YouPetActionRequestCoreError ? error.code : undefined,
+    });
   }
 
   private saveSliceCursor(
@@ -1210,9 +1315,119 @@ function resolveExpiredRunningRecoveryMode(
   return { kind: "workerless" };
 }
 
+function isAuthoritativeInvalidCursorError(error: unknown): boolean {
+  return (
+    error instanceof YouPetActionRequestCoreError &&
+    error.status === 422 &&
+    error.code === "invalid_cursor"
+  );
+}
+
+function isSliceLocalProbeFailure(error: unknown): boolean {
+  if (error instanceof YouPetActionRequestTransportError) {
+    return true;
+  }
+  if (!(error instanceof YouPetActionRequestCoreError)) {
+    return false;
+  }
+  if (error.status === 422) {
+    return true;
+  }
+  return error.status >= 500 && error.status <= 599;
+}
+
+// Local classifier only. YouPet may import openclaw/plugin-sdk/*, not host infra.
+const YOUPET_ACTION_REQUEST_TRANSPORT_CODES = new Set([
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "ETIMEDOUT",
+  "ESOCKETTIMEDOUT",
+  "ECONNABORTED",
+  "EPIPE",
+  "ENETDOWN",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "EADDRNOTAVAIL",
+  "EAI_AGAIN",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_DNS_RESOLVE_FAILED",
+  "UND_ERR_CONNECT",
+  "UND_ERR_SOCKET",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
+]);
+
+const YOUPET_ACTION_REQUEST_TRANSPORT_NAMES = new Set([
+  "ConnectTimeoutError",
+  "HeadersTimeoutError",
+  "BodyTimeoutError",
+]);
+
+const YOUPET_ACTION_REQUEST_TRANSPORT_MESSAGE_RE = new RegExp(
+  `\\b(${[...YOUPET_ACTION_REQUEST_TRANSPORT_CODES].join("|")})\\b`,
+  "i",
+);
+
+function wrapYouPetActionRequestTransportError(error: unknown, path: string): unknown {
+  if (error instanceof YouPetActionRequestTransportError) {
+    return error;
+  }
+  if (isYouPetActionRequestTransportFailure(error)) {
+    return new YouPetActionRequestTransportError({ cause: error, path });
+  }
+  return error;
+}
+
+function isYouPetActionRequestTransportFailure(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+  while (current && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    const code = readUnknownErrorCode(current);
+    if (code && YOUPET_ACTION_REQUEST_TRANSPORT_CODES.has(code)) {
+      return true;
+    }
+    const name = readUnknownErrorName(current);
+    if (name && YOUPET_ACTION_REQUEST_TRANSPORT_NAMES.has(name)) {
+      return true;
+    }
+    const message = readUnknownErrorMessage(current);
+    if (message && YOUPET_ACTION_REQUEST_TRANSPORT_MESSAGE_RE.test(message)) {
+      return true;
+    }
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+function readUnknownErrorCode(error: object): string | undefined {
+  const record = error as { code?: unknown; errno?: unknown };
+  if (typeof record.code === "string" && record.code.length > 0) {
+    return record.code;
+  }
+  if (typeof record.errno === "string" && record.errno.length > 0) {
+    return record.errno;
+  }
+  return undefined;
+}
+
+function readUnknownErrorName(error: object): string | undefined {
+  const name = (error as { name?: unknown }).name;
+  return typeof name === "string" && name.length > 0 ? name : undefined;
+}
+
+function readUnknownErrorMessage(error: object): string | undefined {
+  const message = (error as { message?: unknown }).message;
+  return typeof message === "string" && message.length > 0 ? message : undefined;
+}
+
 function summarizeDispatchError(error: unknown): string {
   if (error instanceof YouPetActionRequestCursorStoreError) {
     return `cursor ${error.operation} failed for ${error.sliceKey}`;
+  }
+  if (error instanceof YouPetActionRequestCursorProbeError) {
+    return `cursor probe failed for ${error.sliceKey}${error.status !== undefined ? ` ${error.status}` : ""}${error.code ? ` ${error.code}` : ""}`;
   }
   if (error instanceof YouPetActionRequestCoreError) {
     return `YouPet Core ActionRequest request failed ${error.status} ${error.path}`;
