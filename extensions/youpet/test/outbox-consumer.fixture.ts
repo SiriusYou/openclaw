@@ -21,7 +21,9 @@ export function createCoreOutboxEvent(
 ): YouPetOutboxDeliveryEnvelope {
   const deliveryId = overrides.event_id ?? `evt-${eventType}`;
   const innerEventId = options.innerEventId ?? `payload-${deliveryId}`;
-  const correlationId = overrides.correlation_id ?? "corr-1";
+  const correlationId = Object.hasOwn(overrides, "correlation_id")
+    ? overrides.correlation_id
+    : "corr-1";
   const aggregateId =
     typeof businessPayload.task_id === "string"
       ? businessPayload.task_id
@@ -39,13 +41,13 @@ export function createCoreOutboxEvent(
     event_type: eventType,
     aggregate_type: "task_instance",
     aggregate_id: aggregateId,
-    correlation_id: correlationId,
+    correlation_id: correlationId ?? null,
     payload: {
       aggregate: {
         id: aggregateId,
         type: "task_instance",
       },
-      correlation_id: correlationId,
+      correlation_id: correlationId ?? null,
       event_id: innerEventId,
       event_type: eventType,
       event_version: 1,
@@ -92,7 +94,7 @@ export function actionRequestEnvelopeFromCreate(
       approval: { state: approvalState },
       execution: { state: "not_started" },
       links: { domain_event_ids: request.links.domain_event_ids },
-      correlation_id: request.correlation_id ?? "corr-server-generated",
+      correlation_id: request.correlation_id ?? null,
       created_at: request.policy.decided_at,
       updated_at: request.policy.decided_at,
     },

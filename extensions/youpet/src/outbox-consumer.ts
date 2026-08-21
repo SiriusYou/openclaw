@@ -645,7 +645,7 @@ export class YouPetOutboxConsumer {
       query?: Record<string, string>;
       body?: unknown;
       idempotencyKey?: string;
-      correlationId?: string;
+      correlationId?: string | null;
     },
   ): Promise<T> {
     const url = this.buildUrl(path, options.query);

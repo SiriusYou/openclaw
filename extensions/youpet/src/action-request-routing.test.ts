@@ -8,6 +8,7 @@ import {
   createYouPetTestFlowStore,
   createYouPetTempStateEnv,
 } from "../test/flow-store.fixture.js";
+import { actionRequestEnvelopeFromCreate } from "../test/outbox-consumer.fixture.js";
 import {
   createYouPetActionRequestCursorStore,
   toYouPetActionRequestCursorKey,
@@ -108,6 +109,48 @@ describe("YouPet ActionRequest proposal routing", () => {
     expect(first.idempotencyKey).toMatch(/^openclaw\.youpet\.proposal\.[0-9a-f]{64}$/u);
   });
 
+  it("omits correlation_id when the source event correlation is null or absent", () => {
+    const absent = buildYouPetActionRequestProposal({
+      routeId: "task-escalate",
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      sourceEventId: "evt-task-missed-no-correlation",
+      sourceOccurredAt: "2026-08-09T01:02:03Z",
+      targetId: TASK_ID,
+      payloadFields: {
+        task_id: TASK_ID,
+        severity: "medium",
+        summary: "Task missed the configured YouPet check-in threshold.",
+      },
+    });
+    const explicitNull = buildYouPetActionRequestProposal({
+      routeId: "task-escalate",
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      sourceEventId: "evt-task-missed-null-correlation",
+      sourceOccurredAt: "2026-08-09T01:02:03Z",
+      correlationId: null,
+      targetId: TASK_ID,
+      payloadFields: {
+        task_id: TASK_ID,
+        severity: "medium",
+        summary: "Task missed the configured YouPet check-in threshold.",
+      },
+    });
+
+    expect(absent.request).not.toHaveProperty("correlation_id");
+    expect(explicitNull.request).not.toHaveProperty("correlation_id");
+    expect(
+      actionRequestEnvelopeFromCreate(absent.request).action_request.correlation_id,
+    ).toBeNull();
+    expect(
+      actionRequestEnvelopeFromCreate({
+        ...explicitNull.request,
+        correlation_id: null,
+      }).action_request.correlation_id,
+    ).toBeNull();
+  });
+
   it("locks health-plan flow linking to an explicit allow policy", () => {
     const proposal = buildYouPetActionRequestProposal({
       routeId: "health-plan-flow-link",
@@ -161,6 +204,7 @@ describe("YouPet ActionRequest proposal routing", () => {
     const second = build("00000000-0000-4000-8000-000000000102");
 
     expect(second.request.id).not.toBe(first.request.id);
+    expect(second.request.policy.decision_id).not.toBe(first.request.policy.decision_id);
     expect(second.idempotencyKey).not.toBe(first.idempotencyKey);
   });
 
@@ -281,6 +325,65 @@ describe("YouPet ActionRequest client boundary", () => {
       expected_row_version: 3,
       worker_id: "worker-a",
     });
+  });
+
+  it("accepts null or omitted correlation_id across create, get, and list responses", async () => {
+    const capturedBodies: unknown[] = [];
+    const createdEnvelope = createEnvelope({ correlationId: null, requestId: nthUuid(20_610) });
+    const fetchedEnvelope = createEnvelope({
+      omitCorrelationId: true,
+      requestId: nthUuid(20_611),
+    });
+    const listedNull = createEnvelope({ correlationId: null, requestId: nthUuid(20_612) });
+    const listedOmitted = createEnvelope({
+      omitCorrelationId: true,
+      requestId: nthUuid(20_613),
+    });
+    const fetchFn = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
+      if (typeof init?.body === "string") {
+        capturedBodies.push(JSON.parse(init.body));
+      }
+      if (url.pathname === "/api/v1/action-requests" && init?.method === "POST") {
+        return jsonResponse(createdEnvelope);
+      }
+      if (url.pathname === `/api/v1/action-requests/${REQUEST_ID}`) {
+        return jsonResponse(fetchedEnvelope);
+      }
+      return jsonResponse({ items: [listedNull, listedOmitted], count: 2, next_cursor: null });
+    });
+    const client = new YouPetActionRequestClient({
+      coreBaseUrl: "https://core.example.com",
+      serviceToken: "svc-token",
+      actorId: ACTOR_ID,
+      fetchFn,
+    });
+    const proposal = buildYouPetActionRequestProposal({
+      routeId: "task-escalate",
+      tenantId: TENANT_ID,
+      actorId: ACTOR_ID,
+      sourceEventId: "evt-task-missed-no-correlation",
+      sourceOccurredAt: "2026-08-09T01:02:03Z",
+      targetId: TASK_ID,
+      payloadFields: {
+        task_id: TASK_ID,
+        severity: "medium",
+        summary: "Task missed the configured YouPet check-in threshold.",
+      },
+    });
+
+    const created = await client.create(proposal);
+    const fetched = await client.get(REQUEST_ID);
+    const listed = await client.list({
+      tenantId: TENANT_ID,
+      approvalState: "approved",
+      executionState: "not_started",
+    });
+
+    expect(capturedBodies[0]).not.toHaveProperty("correlation_id");
+    expect(created.action_request.correlation_id).toBeNull();
+    expect(fetched.action_request.correlation_id).toBeNull();
+    expect(listed.items.map((item) => item.action_request.correlation_id)).toEqual([null, null]);
   });
 
   it("fails loudly when Core omits required execution_claim from the envelope", async () => {
@@ -3315,6 +3418,8 @@ function createEnvelope(
     requestId?: string;
     proposerId?: string;
     targetId?: string;
+    correlationId?: string | null;
+    omitCorrelationId?: boolean;
     approvalState?: string;
     executionState?: string;
     executionClaimOwnerId?: string | null;
@@ -3328,6 +3433,9 @@ function createEnvelope(
 ): YouPetActionRequestEnvelope {
   const requestId = overrides.requestId ?? REQUEST_ID;
   const targetId = overrides.targetId ?? TASK_ID;
+  const correlationId = Object.hasOwn(overrides, "correlationId")
+    ? overrides.correlationId
+    : "corr-task-1";
   return {
     action_request: {
       id: requestId,
@@ -3356,7 +3464,7 @@ function createEnvelope(
       approval: { state: overrides.approvalState ?? "approved" },
       execution: { state: overrides.executionState ?? "not_started" },
       links: { domain_event_ids: ["evt-task-missed-1"] },
-      correlation_id: "corr-task-1",
+      ...(overrides.omitCorrelationId ? {} : { correlation_id: correlationId ?? null }),
       created_at: "2026-08-09T01:00:00Z",
       updated_at: "2026-08-09T01:30:00Z",
     },

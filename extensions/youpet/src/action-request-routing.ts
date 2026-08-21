@@ -84,7 +84,7 @@ export type YouPetActionRequestCreate = {
     proposal_event_id: string;
     idempotency_key: string;
   };
-  correlation_id?: string;
+  correlation_id?: string | null;
 };
 
 export type YouPetActionRequest = {
@@ -103,7 +103,7 @@ export type YouPetActionRequest = {
   approval: { state: string };
   execution: { state: string };
   links: { domain_event_ids: string[] };
-  correlation_id: string;
+  correlation_id?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -301,7 +301,7 @@ export class YouPetActionRequestClient {
       method: "GET" | "POST";
       body?: unknown;
       idempotencyKey?: string;
-      correlationId?: string;
+      correlationId?: string | null;
     },
   ): Promise<YouPetActionRequestEnvelope> {
     return parseActionRequestEnvelope(await this.requestJson(path, options));
@@ -314,7 +314,7 @@ export class YouPetActionRequestClient {
       query?: Record<string, string>;
       body?: unknown;
       idempotencyKey?: string;
-      correlationId?: string;
+      correlationId?: string | null;
     },
   ): Promise<unknown> {
     const url = new URL(path, `${this.coreBaseUrl}/`);
@@ -394,7 +394,12 @@ export function buildYouPetActionRequestProposal(params: {
     risk: route.risk,
     payload: { mode: "inline" as const, fields: { ...params.payloadFields } },
     policy: {
-      decision_id: deterministicUuid("policy", params.routeId, params.sourceEventId),
+      decision_id: deterministicUuid(
+        "policy",
+        params.tenantId,
+        params.routeId,
+        params.sourceEventId,
+      ),
       outcome: route.policyOutcome,
       reasons: [route.policyReason],
       obligations: [...route.policyObligations],
@@ -1199,7 +1204,10 @@ function parseActionRequestEnvelope(value: unknown): YouPetActionRequestEnvelope
           requireString(item, "ActionRequest links.domain_event_ids[]"),
         ),
       },
-      correlation_id: requireString(request.correlation_id, "ActionRequest correlation_id"),
+      correlation_id:
+        request.correlation_id === null || request.correlation_id === undefined
+          ? null
+          : requireString(request.correlation_id, "ActionRequest correlation_id"),
       created_at: requireString(request.created_at, "ActionRequest created_at"),
       updated_at: requireString(request.updated_at, "ActionRequest updated_at"),
     },
