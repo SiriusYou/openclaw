@@ -5,12 +5,14 @@
     "onStartup": true
   },
   "name": "YouPet Core",
-  "description": "Consumes YouPet Core outbox deliveries for orchestration actions.",
+  "description": "Consumes YouPet Core outbox deliveries, persists bounded ActionRequest proposals, and dispatches only authorized mutations.",
   "setup": {
     "envVars": [
       "YOUPET_OPENCLAW_ENABLED",
       "YOUPET_CORE_BASE_URL",
       "YOUPET_SERVICE_TOKEN",
+      "YOUPET_TENANT_ID",
+      "YOUPET_OPENCLAW_ACTOR_ID",
       "YOUPET_OPENCLAW_MANAGE_FLOWS"
     ]
   },
@@ -28,9 +30,15 @@
       "serviceToken": {
         "type": "string"
       },
+      "tenantId": {
+        "type": "string",
+        "format": "uuid",
+        "description": "Explicit Core tenant UUID used for ActionRequest proposal and dispatch. No shared or implicit tenant is used."
+      },
       "actorId": {
         "type": "string",
-        "default": "openclaw-youpet-consumer"
+        "default": "openclaw-youpet-consumer",
+        "description": "Opaque OpenClaw proposer identity. Dispatch accepts only ActionRequests created by this actor."
       },
       "outboxConsumer": {
         "type": "string",
@@ -50,15 +58,18 @@
       },
       "ackUnhandledEvents": {
         "type": "boolean",
-        "default": true
+        "default": true,
+        "description": "Acknowledge unsupported YouPet event types. When false, nack them with unsupported_event_type so Core retries and may eventually dead-letter the delivery."
       },
       "escalateMissedTasks": {
         "type": "boolean",
-        "default": true
+        "default": true,
+        "description": "Create high-risk task.escalate ActionRequests for threshold task.missed events; no direct escalation is performed before approval."
       },
       "manageFlows": {
         "type": "boolean",
-        "default": true
+        "default": true,
+        "description": "Maintain local flow state and create low-risk allow-policy ActionRequests for Core flow linking."
       }
     }
   }

@@ -1,3 +1,14 @@
+import type { YouPetActionRequestCursorStore } from "./action-request-cursor-store.js";
+import {
+  buildYouPetActionRequestProposal,
+  YouPetActionRequestClient,
+  YouPetActionRequestCoreError,
+  YouPetActionRequestDispatcher,
+  type YouPetActionRequestDispatchResult,
+  type YouPetActionRequestEnvelope,
+  type YouPetActionRequestRouteId,
+  type YouPetMutationOutcome,
+} from "./action-request-routing.js";
 import type { YouPetFlowStore } from "./flow-store.js";
 
 export const SUPPORTED_YOUPET_OPENCLAW_EVENT_TYPES = [
@@ -18,7 +29,26 @@ export type YouPetOutboxFetch = (
   init?: RequestInit,
 ) => Promise<Response>;
 
+export interface YouPetOutboxDeliveryEnvelope {
+  event_id: string;
+  consumer: "openclaw";
+  state: YouPetOutboxDeliveryState;
+  attempts: number;
+  next_attempt_at: string;
+  last_attempt_at?: string | null;
+  delivered_at?: string | null;
+  dead_lettered_at?: string | null;
+  last_error?: string | null;
+  event_type: string;
+  aggregate_type: string;
+  aggregate_id: string;
+  correlation_id?: string | null;
+  payload: Record<string, unknown>;
+  created_at: string;
+}
+
 export interface YouPetOutboxEventEnvelope {
+  delivery_id: string;
   event_id: string;
   consumer: "openclaw";
   state: YouPetOutboxDeliveryState;
@@ -75,7 +105,9 @@ export interface YouPetOutboxConsumerSettings {
   enabled?: boolean;
   coreBaseUrl: string;
   serviceToken: string;
+  tenantId?: string;
   actorId?: string;
+  workerId?: string;
   outboxConsumer?: "openclaw";
   outboxLimit?: number;
   pollIntervalMs?: number;
@@ -83,6 +115,7 @@ export interface YouPetOutboxConsumerSettings {
   escalateMissedTasks?: boolean;
   manageFlows?: boolean;
   flowStore?: YouPetFlowStore;
+  actionRequestCursorStore?: YouPetActionRequestCursorStore;
   fetchFn?: YouPetOutboxFetch;
   logger?: YouPetOutboxConsumerLogger;
   handlers?: Partial<Record<YouPetOpenClawEventType, YouPetOutboxEventHandler>>;
@@ -94,6 +127,7 @@ export interface ResolvedYouPetOutboxConsumerSettings extends Required<
     | "enabled"
     | "coreBaseUrl"
     | "serviceToken"
+    | "tenantId"
     | "actorId"
     | "outboxConsumer"
     | "outboxLimit"
@@ -104,6 +138,7 @@ export interface ResolvedYouPetOutboxConsumerSettings extends Required<
   >
 > {
   flowStore?: YouPetFlowStore;
+  actionRequestCursorStore?: YouPetActionRequestCursorStore;
   fetchFn?: YouPetOutboxFetch;
   logger?: YouPetOutboxConsumerLogger;
   handlers?: Partial<Record<YouPetOpenClawEventType, YouPetOutboxEventHandler>>;
@@ -112,6 +147,8 @@ export interface ResolvedYouPetOutboxConsumerSettings extends Required<
 type ResolvedRuntimeSettings = Omit<ResolvedYouPetOutboxConsumerSettings, "fetchFn"> & {
   fetchFn: YouPetOutboxFetch;
 };
+
+type YouPetOutboxProcessEventResult = "handled" | "unhandled";
 
 export class YouPetCoreRequestError extends Error {
   readonly status: number;
@@ -129,8 +166,10 @@ export class YouPetCoreRequestError extends Error {
 
 export class YouPetOutboxConsumer {
   private readonly settings: ResolvedRuntimeSettings;
+  private readonly actionRequests: YouPetActionRequestClient;
+  private readonly actionRequestDispatcher: YouPetActionRequestDispatcher | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
-  private pollInFlight = false;
+  private cycleInFlight = false;
 
   constructor(settings: YouPetOutboxConsumerSettings) {
     const fetchFn = settings.fetchFn ?? globalThis.fetch;
@@ -141,6 +180,7 @@ export class YouPetOutboxConsumer {
       enabled: settings.enabled ?? true,
       coreBaseUrl: normalizeBaseUrl(settings.coreBaseUrl),
       serviceToken: settings.serviceToken,
+      tenantId: settings.tenantId ?? "",
       actorId: settings.actorId ?? "openclaw-youpet-consumer",
       outboxConsumer: settings.outboxConsumer ?? "openclaw",
       outboxLimit: clampInteger(settings.outboxLimit, 20, 1, 500),
@@ -149,19 +189,37 @@ export class YouPetOutboxConsumer {
       escalateMissedTasks: settings.escalateMissedTasks ?? true,
       manageFlows: settings.manageFlows ?? true,
       flowStore: settings.flowStore,
+      actionRequestCursorStore: settings.actionRequestCursorStore,
       fetchFn,
       logger: settings.logger,
       handlers: settings.handlers,
     };
+    this.actionRequests = new YouPetActionRequestClient({
+      coreBaseUrl: this.settings.coreBaseUrl,
+      serviceToken: this.settings.serviceToken,
+      actorId: this.settings.actorId,
+      fetchFn,
+    });
+    this.actionRequestDispatcher = isUuid(this.settings.tenantId)
+      ? new YouPetActionRequestDispatcher({
+          client: this.actionRequests,
+          tenantId: this.settings.tenantId,
+          actorId: this.settings.actorId,
+          workerId: settings.workerId,
+          executeMutation: async (params) => await this.executeActionRequestMutation(params),
+          logger: this.settings.logger,
+          cursorStore: this.settings.actionRequestCursorStore,
+        })
+      : undefined;
   }
 
   startPolling(): void {
     if (this.timer) {
       return;
     }
-    void this.pollSafely();
+    void this.runCycleSafely();
     this.timer = setInterval(() => {
-      void this.pollSafely();
+      void this.runCycleSafely();
     }, this.settings.pollIntervalMs);
   }
 
@@ -193,8 +251,8 @@ export class YouPetOutboxConsumer {
 
     for (const rawItem of items) {
       result.processed += 1;
-      const rawEventId = readRawEventId(rawItem);
-      if (!rawEventId) {
+      const rawDeliveryId = readRawDeliveryId(rawItem);
+      if (!rawDeliveryId) {
         this.settings.logger?.error?.("[youpet] Skipping outbox item with missing event_id");
         result.skipped += 1;
         continue;
@@ -206,66 +264,88 @@ export class YouPetOutboxConsumer {
       } catch (error) {
         const formattedError = formatError(error);
         this.settings.logger?.warn?.(
-          `[youpet] Nacking malformed outbox item ${rawEventId}: ${formattedError}`,
+          `[youpet] Nacking malformed outbox item ${rawDeliveryId}: ${formattedError}`,
         );
-        await this.nack(rawEventId, formattedError);
+        await this.nack(rawDeliveryId, formattedError);
         result.nacked += 1;
         continue;
       }
 
+      let outcome: YouPetOutboxProcessEventResult;
       try {
-        await this.processEvent(item);
+        outcome = await this.processEvent(item);
       } catch (error) {
-        const formattedError = formatError(error);
+        const formattedError = safeErrorSummary(error);
         this.settings.logger?.warn?.(
-          `[youpet] Nacking malformed or failed ${item.event_type} event ${item.event_id}: ` +
-            formattedError,
+          `[youpet] Nacking malformed or failed ${item.event_type} delivery ${item.delivery_id} ` +
+            `(domain event ${item.event_id}): ${formattedError}`,
         );
-        await this.nack(item.event_id, formattedError);
+        await this.nack(item.delivery_id, formattedError);
         result.nacked += 1;
         continue;
       }
-      await this.ack(item.event_id);
+      if (outcome === "unhandled") {
+        if (!this.settings.ackUnhandledEvents) {
+          this.settings.logger?.info?.(
+            `[youpet] Nacking unsupported ${item.event_type} delivery ${item.delivery_id} ` +
+              `(domain event ${item.event_id})`,
+          );
+          await this.nack(item.delivery_id, `unsupported_event_type: ${item.event_type}`);
+          result.nacked += 1;
+          continue;
+        }
+        this.settings.logger?.info?.(
+          `[youpet] Acknowledging unhandled outbox event type: ${item.event_type}`,
+        );
+      }
+      await this.ack(item.delivery_id);
       result.acknowledged += 1;
     }
 
     return result;
   }
 
-  async processEvent(event: YouPetOutboxEventEnvelope): Promise<void> {
+  async dispatchActionRequestsOnce(): Promise<YouPetActionRequestDispatchResult> {
+    if (!this.actionRequestDispatcher) {
+      throw new Error("YouPet ActionRequest routing requires an explicit UUID tenantId");
+    }
+    return await this.actionRequestDispatcher.dispatchOnce();
+  }
+
+  async processEvent(event: YouPetOutboxEventEnvelope): Promise<YouPetOutboxProcessEventResult> {
     if (!isYouPetOpenClawEventType(event.event_type)) {
-      this.settings.logger?.info?.(
-        `[youpet] Acknowledging unhandled outbox event type: ${event.event_type}`,
-      );
-      return;
+      return "unhandled";
     }
 
     const handler = this.settings.handlers?.[event.event_type];
     if (handler) {
       await handler(event, { consumer: this });
-      return;
+      return "handled";
     }
 
     // Production flow behavior is built in here; settings.handlers remains only
     // an override seam, so config-only installs cannot ack-drop supported flows.
     if (event.event_type === "health_plan.activated") {
       await this.handleHealthPlanActivated(event);
-      return;
+      return "handled";
     }
 
     if (event.event_type === "task.checkin_received") {
       await this.handleTaskCheckinReceived(event);
-      return;
+      return "handled";
     }
 
     if (event.event_type === "task.missed") {
       await this.handleTaskMissed(event);
+      return "handled";
     }
+
+    return "handled";
   }
 
-  async ack(eventId: string): Promise<YouPetOutboxDelivery> {
+  async ack(deliveryId: string): Promise<YouPetOutboxDelivery> {
     return await this.requestJson<YouPetOutboxDelivery>(
-      `/internal/events/outbox/${encodeURIComponent(eventId)}/ack`,
+      `/internal/events/outbox/${encodeURIComponent(deliveryId)}/ack`,
       {
         method: "POST",
         query: {
@@ -275,9 +355,9 @@ export class YouPetOutboxConsumer {
     );
   }
 
-  async nack(eventId: string, error: string): Promise<YouPetOutboxDelivery> {
+  async nack(deliveryId: string, error: string): Promise<YouPetOutboxDelivery> {
     return await this.requestJson<YouPetOutboxDelivery>(
-      `/internal/events/outbox/${encodeURIComponent(eventId)}/nack`,
+      `/internal/events/outbox/${encodeURIComponent(deliveryId)}/nack`,
       {
         method: "POST",
         query: {
@@ -290,17 +370,26 @@ export class YouPetOutboxConsumer {
     );
   }
 
-  private async pollSafely(): Promise<void> {
-    if (this.pollInFlight) {
+  private async runCycleSafely(): Promise<void> {
+    if (this.cycleInFlight) {
       return;
     }
-    this.pollInFlight = true;
+    this.cycleInFlight = true;
     try {
-      await this.pollOnce();
-    } catch (error) {
-      this.settings.logger?.error?.(`[youpet] Outbox poll failed: ${formatError(error)}`);
+      try {
+        await this.pollOnce();
+      } catch (error) {
+        this.settings.logger?.error?.(`[youpet] Outbox poll failed: ${safeErrorSummary(error)}`);
+      }
+      try {
+        await this.dispatchActionRequestsOnce();
+      } catch (error) {
+        this.settings.logger?.error?.(
+          `[youpet] ActionRequest dispatch failed: ${safeErrorSummary(error)}`,
+        );
+      }
     } finally {
-      this.pollInFlight = false;
+      this.cycleInFlight = false;
     }
   }
 
@@ -325,30 +414,21 @@ export class YouPetOutboxConsumer {
       return;
     }
 
-    try {
-      await this.requestJson<unknown>(`/api/v1/tasks/${encodeURIComponent(taskId)}/escalate`, {
-        method: "POST",
-        body: {
-          severity: "medium",
-          summary: "Task missed the configured YouPet check-in threshold.",
-        },
-        idempotencyKey: `openclaw:youpet:${event.event_id}:escalate`,
-        correlationId: event.correlation_id ?? undefined,
-      });
-    } catch (error) {
-      const conflict = readInvalidTaskStateConflict(error);
-      if (!conflict) {
-        throw error;
-      }
-      this.settings.logger?.warn?.(
-        `[youpet] Acknowledging terminal task.missed escalation conflict ${JSON.stringify({
-          event_id: event.event_id,
-          task_id: taskId,
-          current_status: conflict.currentStatus ?? null,
-          allowed_statuses: conflict.allowedStatuses ?? [],
-        })}`,
-      );
-    }
+    const proposal = buildYouPetActionRequestProposal({
+      routeId: "task-escalate",
+      tenantId: this.requireTenantId(),
+      actorId: this.settings.actorId,
+      sourceEventId: event.event_id,
+      sourceOccurredAt: readSourceOccurredAt(event),
+      correlationId: event.correlation_id,
+      targetId: taskId,
+      payloadFields: {
+        task_id: taskId,
+        severity: "medium",
+        summary: "Task missed the configured YouPet check-in threshold.",
+      },
+    });
+    await this.actionRequests.create(proposal);
   }
 
   private async handleHealthPlanActivated(event: YouPetOutboxEventEnvelope): Promise<void> {
@@ -369,6 +449,12 @@ export class YouPetOutboxConsumer {
       );
       throw new Error("Malformed YouPet health_plan.activated payload");
     }
+    if (!isUuid(planId)) {
+      this.settings.logger?.warn?.(
+        `[youpet] Malformed health_plan.activated event ${event.event_id}: plan_id must be a UUID`,
+      );
+      throw new Error("Malformed YouPet health_plan.activated payload");
+    }
     if (!this.settings.flowStore) {
       throw new Error("YouPet health_plan.activated handling requires a flow store");
     }
@@ -382,37 +468,132 @@ export class YouPetOutboxConsumer {
       ...(petId ? { petId } : {}),
       correlationId: event.correlation_id ?? null,
     });
-    // Flow creation is event-ledgered, but Core writeback is a separate
-    // completion step. Gate on the link marker so a failed writeback can retry
-    // on redelivery even when the activation event is already ledgered.
+    // Flow identity is event-ledgered before proposal so redelivery produces
+    // the same payload. Core remains the durable execution authority.
     if (flow.core_linked) {
       return;
     }
+    const proposal = buildYouPetActionRequestProposal({
+      routeId: "health-plan-flow-link",
+      tenantId: this.requireTenantId(),
+      actorId: this.settings.actorId,
+      sourceEventId: event.event_id,
+      sourceOccurredAt: readSourceOccurredAt(event),
+      correlationId: event.correlation_id,
+      targetId: planId,
+      payloadFields: {
+        health_plan_id: planId,
+        openclaw_flow_id: flow.flow_id,
+      },
+    });
+    await this.actionRequests.create(proposal);
+  }
 
+  private requireTenantId(): string {
+    if (!isUuid(this.settings.tenantId)) {
+      throw new Error("YouPet ActionRequest routing requires an explicit UUID tenantId");
+    }
+    return this.settings.tenantId;
+  }
+
+  private async executeActionRequestMutation(params: {
+    routeId: YouPetActionRequestRouteId;
+    envelope: YouPetActionRequestEnvelope;
+    idempotencyKey: string;
+  }): Promise<YouPetMutationOutcome> {
+    const fields = params.envelope.action_request.payload.fields ?? {};
+    const targetId = params.envelope.action_request.target.id;
     try {
-      await this.requestJson<unknown>(`/api/v1/health-plans/${encodeURIComponent(planId)}/flow`, {
-        method: "POST",
-        body: {
-          openclaw_flow_id: flow.flow_id,
-        },
-        idempotencyKey: `openclaw:youpet:${event.event_id}:flow-link`,
-        correlationId: event.correlation_id ?? undefined,
-      });
-      this.settings.flowStore.markFlowCoreLinked(planId);
-    } catch (error) {
-      const conflict = readFlowIdConflict(error);
-      if (!conflict) {
-        throw error;
+      if (params.routeId === "task-escalate") {
+        const response = await this.requestJson<Record<string, unknown>>(
+          `/api/v1/tasks/${encodeURIComponent(targetId)}/escalate`,
+          {
+            method: "POST",
+            body: {
+              severity: requirePayloadString(fields.severity, "payload.fields.severity"),
+              summary: requirePayloadString(fields.summary, "payload.fields.summary"),
+            },
+            idempotencyKey: params.idempotencyKey,
+            correlationId: params.envelope.action_request.correlation_id,
+          },
+        );
+        return {
+          kind: "succeeded",
+          result: {
+            status_code: 201,
+            outcome_code: "task_escalated",
+            related_type: "alert",
+            ...(readString(response.id) ? { related_id: readString(response.id) } : {}),
+            retryable: false,
+          },
+        };
       }
-      this.settings.logger?.warn?.(
-        `[youpet] Acknowledging terminal health_plan.activated flow-link conflict ${JSON.stringify({
-          event_id: event.event_id,
-          plan_id: planId,
-          current_flow_id: conflict.currentFlowId ?? null,
-          attempted_flow_id: conflict.attemptedFlowId ?? null,
-        })}`,
+
+      const flowId = requirePayloadString(
+        fields.openclaw_flow_id,
+        "payload.fields.openclaw_flow_id",
       );
-      this.settings.flowStore.markFlowCoreLinked(planId);
+      await this.requestJson<Record<string, unknown>>(
+        `/api/v1/health-plans/${encodeURIComponent(targetId)}/flow`,
+        {
+          method: "POST",
+          body: { openclaw_flow_id: flowId },
+          idempotencyKey: params.idempotencyKey,
+          correlationId: params.envelope.action_request.correlation_id,
+        },
+      );
+      this.settings.flowStore?.markFlowCoreLinked(targetId);
+      return {
+        kind: "succeeded",
+        result: {
+          status_code: 200,
+          outcome_code: "health_plan_flow_linked",
+          related_type: "health_plan",
+          related_id: targetId,
+          retryable: false,
+        },
+      };
+    } catch (error) {
+      if (params.routeId !== "task-escalate") {
+        const conflict = readFlowIdConflict(error);
+        const attemptedFlowId = readString(fields.openclaw_flow_id);
+        if (
+          attemptedFlowId &&
+          conflict?.currentFlowId === attemptedFlowId &&
+          conflict.attemptedFlowId === attemptedFlowId
+        ) {
+          this.settings.flowStore?.markFlowCoreLinked(targetId);
+          return {
+            kind: "succeeded",
+            result: {
+              status_code: 409,
+              outcome_code: "health_plan_flow_already_linked",
+              related_type: "health_plan",
+              related_id: targetId,
+              retryable: false,
+            },
+          };
+        }
+      }
+      if (!(error instanceof YouPetCoreRequestError) || isRetryableCoreStatus(error.status)) {
+        return { kind: "retry" };
+      }
+      return {
+        kind: "failed",
+        error: {
+          code: "youpet_core_mutation_rejected",
+          message: "YouPet Core rejected the authorized mutation",
+          details: {
+            status_code: error.status,
+            retryable: false,
+            provider: "youpet_core",
+            operation: params.routeId,
+            related_type: params.envelope.action_request.target.type,
+            related_id: targetId,
+            reason_code: readCoreErrorCode(error) ?? "core_request_failed",
+          },
+        },
+      };
     }
   }
 
@@ -464,7 +645,7 @@ export class YouPetOutboxConsumer {
       query?: Record<string, string>;
       body?: unknown;
       idempotencyKey?: string;
-      correlationId?: string;
+      correlationId?: string | null;
     },
   ): Promise<T> {
     const url = this.buildUrl(path, options.query);
@@ -522,6 +703,7 @@ export function createYouPetOutboxConsumerSettingsFromConfig(params: {
       readConfigString(config.coreBaseUrl, env.YOUPET_CORE_BASE_URL, ""),
     ),
     serviceToken: readConfigString(config.serviceToken, env.YOUPET_SERVICE_TOKEN, ""),
+    tenantId: readConfigString(config.tenantId, env.YOUPET_TENANT_ID, ""),
     actorId: readConfigString(
       config.actorId,
       env.YOUPET_OPENCLAW_ACTOR_ID,
@@ -557,9 +739,13 @@ export function createYouPetOutboxConsumerSettingsFromConfig(params: {
 }
 
 export function isYouPetOutboxConsumerConfigured(
-  settings: Pick<YouPetOutboxConsumerSettings, "coreBaseUrl" | "serviceToken">,
+  settings: Pick<YouPetOutboxConsumerSettings, "coreBaseUrl" | "serviceToken" | "tenantId">,
 ): boolean {
-  return settings.coreBaseUrl.trim().length > 0 && settings.serviceToken.trim().length > 0;
+  return (
+    settings.coreBaseUrl.trim().length > 0 &&
+    settings.serviceToken.trim().length > 0 &&
+    isUuid(settings.tenantId ?? "")
+  );
 }
 
 function normalizeOutboxEvent(item: unknown): YouPetOutboxEventEnvelope {
@@ -567,8 +753,10 @@ function normalizeOutboxEvent(item: unknown): YouPetOutboxEventEnvelope {
     throw new Error("YouPet outbox item must be an object");
   }
   const row = item as Record<string, unknown>;
+  const payload = readRecord(row.payload);
   return {
-    event_id: requireString(row.event_id, "event_id"),
+    delivery_id: requireString(row.event_id, "event_id"),
+    event_id: requireEnvelopeEventId(payload),
     consumer: "openclaw",
     state: requireDeliveryState(row.state),
     attempts: readPositiveInteger(row.attempts) ?? 0,
@@ -581,12 +769,12 @@ function normalizeOutboxEvent(item: unknown): YouPetOutboxEventEnvelope {
     aggregate_type: requireString(row.aggregate_type, "aggregate_type"),
     aggregate_id: requireString(row.aggregate_id, "aggregate_id"),
     correlation_id: readNullableString(row.correlation_id),
-    payload: readRecord(row.payload),
+    payload,
     created_at: requireString(row.created_at, "created_at"),
   };
 }
 
-function readRawEventId(item: unknown): string | undefined {
+function readRawDeliveryId(item: unknown): string | undefined {
   if (!item || typeof item !== "object") {
     return undefined;
   }
@@ -637,28 +825,16 @@ function readCoreBusinessPayload(
   return readOptionalRecord(event.payload.payload);
 }
 
-function readInvalidTaskStateConflict(
-  error: unknown,
-): { currentStatus: string | undefined; allowedStatuses: string[] | undefined } | undefined {
-  if (!(error instanceof YouPetCoreRequestError) || error.status !== 409) {
-    return undefined;
+function readSourceOccurredAt(event: YouPetOutboxEventEnvelope): string {
+  return readString(event.payload.occurred_at) ?? event.created_at;
+}
+
+function requireEnvelopeEventId(payload: Record<string, unknown>): string {
+  const eventId = readString(payload.event_id);
+  if (!eventId) {
+    throw new Error("YouPet outbox item missing payload.event_id");
   }
-  let body: unknown;
-  try {
-    body = JSON.parse(error.responseBody);
-  } catch {
-    return undefined;
-  }
-  const detail = readOptionalRecord(readOptionalRecord(body)?.detail);
-  if (!detail || detail.code !== "invalid_task_state") {
-    return undefined;
-  }
-  return {
-    currentStatus: typeof detail.current_status === "string" ? detail.current_status : undefined,
-    allowedStatuses: Array.isArray(detail.allowed_statuses)
-      ? detail.allowed_statuses.filter((value): value is string => typeof value === "string")
-      : undefined,
-  };
+  return eventId;
 }
 
 function readFlowIdConflict(
@@ -683,6 +859,27 @@ function readFlowIdConflict(
   };
 }
 
+function readCoreErrorCode(error: YouPetCoreRequestError): string | undefined {
+  try {
+    const body = readOptionalRecord(JSON.parse(error.responseBody));
+    return readString(readOptionalRecord(body?.detail)?.code);
+  } catch {
+    return undefined;
+  }
+}
+
+function isRetryableCoreStatus(status: number): boolean {
+  return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
+function requirePayloadString(value: unknown, surface: string): string {
+  const text = readString(value);
+  if (!text) {
+    throw new Error(`${surface} must be a non-empty string`);
+  }
+  return text;
+}
+
 function readPositiveInteger(value: unknown): number | undefined {
   if (value === null || value === undefined || value === "") {
     return undefined;
@@ -696,6 +893,20 @@ function readPositiveInteger(value: unknown): number | undefined {
 
 function normalizeBaseUrl(value: string): string {
   return value.trim().replace(/\/+$/, "");
+}
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value);
+}
+
+function safeErrorSummary(error: unknown): string {
+  if (error instanceof YouPetCoreRequestError) {
+    return `YouPet Core request failed ${error.status} ${error.path}`;
+  }
+  if (error instanceof YouPetActionRequestCoreError) {
+    return `YouPet Core ActionRequest request failed ${error.status} ${error.path}`;
+  }
+  return formatError(error);
 }
 
 function readConfigString(value: unknown, envValue: string | undefined, fallback: string): string {

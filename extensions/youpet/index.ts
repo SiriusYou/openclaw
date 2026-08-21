@@ -1,4 +1,5 @@
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { openYouPetActionRequestCursorStore } from "./src/action-request-cursor-store.js";
 import { openYouPetFlowStore } from "./src/flow-store.js";
 import {
   createYouPetOutboxConsumerSettingsFromConfig,
@@ -9,10 +10,12 @@ import {
 const plugin = definePluginEntry({
   id: "youpet",
   name: "YouPet Core",
-  description: "Consumes YouPet Core outbox deliveries for orchestration actions.",
+  description:
+    "Consumes YouPet Core outbox deliveries, proposes bounded ActionRequests, and dispatches authorized mutations.",
   register(api: OpenClawPluginApi) {
     let consumer: YouPetOutboxConsumer | undefined;
     const flowStore = openYouPetFlowStore(api.runtime.state);
+    const actionRequestCursorStore = openYouPetActionRequestCursorStore(api.runtime.state);
 
     api.registerService({
       id: "youpet-outbox-consumer",
@@ -26,7 +29,7 @@ const plugin = definePluginEntry({
         }
         if (!isYouPetOutboxConsumerConfigured(settings)) {
           ctx.logger.warn(
-            "[youpet] Outbox consumer enabled but missing coreBaseUrl or serviceToken",
+            "[youpet] Outbox consumer enabled but missing coreBaseUrl, serviceToken, or a valid UUID tenantId",
           );
           return;
         }
@@ -34,6 +37,7 @@ const plugin = definePluginEntry({
         consumer = new YouPetOutboxConsumer({
           ...settings,
           flowStore,
+          actionRequestCursorStore,
           logger: ctx.logger,
         });
         consumer.startPolling();

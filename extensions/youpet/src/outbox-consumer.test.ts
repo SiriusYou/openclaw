@@ -1,13 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  actionRequestEnvelopeFromCreate,
   createCoreOutboxEvent,
   TASK_MISSED_CORE_OUTBOX_EVENT,
 } from "../test/outbox-consumer.fixture.js";
 import {
   createYouPetOutboxConsumerSettingsFromConfig,
+  isYouPetOutboxConsumerConfigured,
   YouPetCoreRequestError,
   YouPetOutboxConsumer,
-  type YouPetOutboxEventEnvelope,
+  type YouPetOutboxDeliveryEnvelope,
   type YouPetOutboxFetch,
 } from "./outbox-consumer.js";
 
@@ -28,7 +30,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 function createFetch(routes: {
-  events?: YouPetOutboxEventEnvelope[];
+  events?: YouPetOutboxDeliveryEnvelope[];
   failPath?: string;
   failStatus?: number;
   failBody?: unknown;
@@ -56,6 +58,9 @@ function createFetch(routes: {
     if (parsed.pathname === "/internal/events/outbox") {
       return jsonResponse({ items: routes.events ?? [] });
     }
+    if (parsed.pathname === "/api/v1/action-requests" && method === "POST") {
+      return jsonResponse(actionRequestEnvelopeFromCreate(body as never), 201);
+    }
     if (parsed.pathname.endsWith("/ack")) {
       return jsonResponse({
         event_id: parsed.pathname.split("/").at(-2),
@@ -74,12 +79,34 @@ function createFetch(routes: {
         next_attempt_at: "2026-06-01T00:05:00Z",
       });
     }
-    if (parsed.pathname === "/api/v1/tasks/task-1/escalate") {
-      return jsonResponse({ id: "alert-1", status: "open" }, 201);
-    }
     return jsonResponse({ detail: { code: "not_found", message: parsed.pathname } }, 404);
   };
   return { fetchFn, requests };
+}
+
+const TASK_MISSED_REPLAY_PAYLOAD = {
+  task_id: "00000000-0000-4000-8000-000000000201",
+  plan_id: "00000000-0000-4000-8000-000000000301",
+  owner_user_id: "00000000-0000-4000-8000-000000000701",
+  missed_count: 2,
+  missed_threshold: 2,
+  due_at: "2026-06-01T00:00:00Z",
+} satisfies Record<string, unknown>;
+
+function createTaskMissedReplayEvent(
+  deliveryId: string,
+  innerEventId: string,
+): YouPetOutboxDeliveryEnvelope {
+  return createCoreOutboxEvent(
+    "task.missed",
+    TASK_MISSED_REPLAY_PAYLOAD,
+    {
+      event_id: deliveryId,
+    },
+    {
+      innerEventId,
+    },
+  );
 }
 
 describe("YouPetOutboxConsumer", () => {
@@ -87,12 +114,13 @@ describe("YouPetOutboxConsumer", () => {
     const handledNoOpEvents = ["wecom.message.received", "alert.acknowledged", "alert.resolved"];
     const { fetchFn, requests } = createFetch({
       events: handledNoOpEvents.map((eventType) =>
-        createCoreOutboxEvent(eventType, { task_id: "task-1" }),
+        createCoreOutboxEvent(eventType, { task_id: "00000000-0000-4000-8000-000000000201" }),
       ),
     });
     const consumer = new YouPetOutboxConsumer({
       coreBaseUrl: "https://core.example.com",
       serviceToken: "svc-token",
+      tenantId: "00000000-0000-4000-8000-000000000101",
       fetchFn,
     });
 
@@ -120,13 +148,14 @@ describe("YouPetOutboxConsumer", () => {
     );
   });
 
-  it("escalates missed tasks once the Core threshold is reached", async () => {
+  it("persists a high-risk approval proposal before acknowledging a missed task", async () => {
     const { fetchFn, requests } = createFetch({
       events: [TASK_MISSED_CORE_OUTBOX_EVENT],
     });
     const consumer = new YouPetOutboxConsumer({
       coreBaseUrl: "https://core.example.com",
       serviceToken: "svc-token",
+      tenantId: "00000000-0000-4000-8000-000000000101",
       fetchFn,
     });
 
@@ -139,17 +168,39 @@ describe("YouPetOutboxConsumer", () => {
       nacked: 0,
       skipped: 0,
     });
-    const escalation = requests.find(
-      (request) => new URL(request.url).pathname === "/api/v1/tasks/task-1/escalate",
+    const proposal = requests.find(
+      (request) => new URL(request.url).pathname === "/api/v1/action-requests",
     );
-    expect(escalation).toMatchObject({
+    expect(proposal).toMatchObject({
       method: "POST",
       body: {
-        severity: "medium",
-        summary: "Task missed the configured YouPet check-in threshold.",
+        tenant_id: "00000000-0000-4000-8000-000000000101",
+        action_type: "task.escalate",
+        target: {
+          type: "task_instance",
+          id: "00000000-0000-4000-8000-000000000201",
+        },
+        risk: "high",
+        policy: {
+          outcome: "require_approval",
+          required_approver_class: "operator",
+        },
+        payload: {
+          mode: "inline",
+          fields: {
+            task_id: "00000000-0000-4000-8000-000000000201",
+            severity: "medium",
+            summary: "Task missed the configured YouPet check-in threshold.",
+          },
+        },
       },
     });
-    expect(escalation?.headers["idempotency-key"]).toBe("openclaw:youpet:evt-task.missed:escalate");
+    expect(proposal?.headers["idempotency-key"]).toMatch(
+      /^openclaw\.youpet\.proposal\.[0-9a-f]{64}$/u,
+    );
+    expect(requests.some((request) => new URL(request.url).pathname.endsWith("/escalate"))).toBe(
+      false,
+    );
     expect(requests.at(-1)?.url).toContain("/internal/events/outbox/evt-task.missed/ack");
   });
 
@@ -163,6 +214,7 @@ describe("YouPetOutboxConsumer", () => {
           {
             event_id: "evt-task.missed-missing-business",
             payload: {
+              event_id: "payload-evt-task.missed-missing-business",
               event_type: "task.missed",
               event_version: 1,
               payload: null,
@@ -175,6 +227,7 @@ describe("YouPetOutboxConsumer", () => {
     const consumer = new YouPetOutboxConsumer({
       coreBaseUrl: "https://core.example.com",
       serviceToken: "svc-token",
+      tenantId: "00000000-0000-4000-8000-000000000101",
       fetchFn,
       logger,
     });
@@ -196,7 +249,7 @@ describe("YouPetOutboxConsumer", () => {
     );
     expect(requests.at(-1)?.body).toEqual({ error: "Malformed YouPet task.missed payload" });
     expect(logger.warn).toHaveBeenCalledWith(
-      "[youpet] Malformed task.missed event evt-task.missed-missing-business: missing payload.payload",
+      "[youpet] Malformed task.missed event payload-evt-task.missed-missing-business: missing payload.payload",
     );
   });
 
@@ -204,7 +257,7 @@ describe("YouPetOutboxConsumer", () => {
     const { fetchFn, requests } = createFetch({
       events: [
         createCoreOutboxEvent("task.missed", {
-          task_id: "task-1",
+          task_id: "00000000-0000-4000-8000-000000000201",
           missed_count: 2,
           missed_threshold: null,
         }),
@@ -213,6 +266,7 @@ describe("YouPetOutboxConsumer", () => {
     const consumer = new YouPetOutboxConsumer({
       coreBaseUrl: "https://core.example.com",
       serviceToken: "svc-token",
+      tenantId: "00000000-0000-4000-8000-000000000101",
       fetchFn,
     });
 
@@ -230,37 +284,100 @@ describe("YouPetOutboxConsumer", () => {
     );
   });
 
-  it("uses the same escalation idempotency key for redelivered task.missed events", async () => {
+  it("uses the same proposal idempotency key for redelivered task.missed events", async () => {
     const { fetchFn, requests } = createFetch({
       events: [TASK_MISSED_CORE_OUTBOX_EVENT],
     });
     const consumer = new YouPetOutboxConsumer({
       coreBaseUrl: "https://core.example.com",
       serviceToken: "svc-token",
+      tenantId: "00000000-0000-4000-8000-000000000101",
       fetchFn,
     });
 
     await consumer.pollOnce();
     await consumer.pollOnce();
 
-    const escalationKeys = requests
-      .filter((request) => new URL(request.url).pathname === "/api/v1/tasks/task-1/escalate")
+    const proposalKeys = requests
+      .filter((request) => new URL(request.url).pathname === "/api/v1/action-requests")
       .map((request) => request.headers["idempotency-key"]);
 
-    expect(escalationKeys).toEqual([
-      "openclaw:youpet:evt-task.missed:escalate",
-      "openclaw:youpet:evt-task.missed:escalate",
-    ]);
+    expect(proposalKeys).toHaveLength(2);
+    expect(proposalKeys[0]).toMatch(/^openclaw\.youpet\.proposal\.[0-9a-f]{64}$/u);
+    expect(proposalKeys[1]).toBe(proposalKeys[0]);
+  });
+
+  it("uses payload event identity for idempotency keys when delivery rows are regenerated", async () => {
+    const events = [
+      createTaskMissedReplayEvent("evt-task.missed-redeliver-1", "task-missed-business"),
+    ];
+    const { fetchFn, requests } = createFetch({ events });
+    const consumer = new YouPetOutboxConsumer({
+      coreBaseUrl: "https://core.example.com",
+      serviceToken: "svc-token",
+      tenantId: "00000000-0000-4000-8000-000000000101",
+      fetchFn,
+    });
+
+    await consumer.pollOnce();
+    events.splice(
+      0,
+      events.length,
+      createTaskMissedReplayEvent("evt-task.missed-redeliver-2", "task-missed-business"),
+    );
+    await consumer.pollOnce();
+
+    const proposalKeys = requests
+      .filter((request) => new URL(request.url).pathname === "/api/v1/action-requests")
+      .map((request) => request.headers["idempotency-key"]);
+
+    expect(proposalKeys).toHaveLength(2);
+    expect(proposalKeys[1]).toBe(proposalKeys[0]);
+  });
+
+  it("uses distinct payload event identities for legitimate repeated task.missed escalations", async () => {
+    const events = [
+      createTaskMissedReplayEvent("evt-task.missed-distinct-1", "task-missed-business-1"),
+    ];
+    const { fetchFn, requests } = createFetch({ events });
+    const consumer = new YouPetOutboxConsumer({
+      coreBaseUrl: "https://core.example.com",
+      serviceToken: "svc-token",
+      tenantId: "00000000-0000-4000-8000-000000000101",
+      fetchFn,
+    });
+
+    await consumer.pollOnce();
+    events.splice(
+      0,
+      events.length,
+      createTaskMissedReplayEvent("evt-task.missed-distinct-2", "task-missed-business-2"),
+    );
+    await consumer.pollOnce();
+
+    const proposalKeys = requests
+      .filter((request) => new URL(request.url).pathname === "/api/v1/action-requests")
+      .map((request) => request.headers["idempotency-key"]);
+
+    expect(proposalKeys).toHaveLength(2);
+    expect(proposalKeys[0]).not.toBe(proposalKeys[1]);
   });
 
   it("nacks processing failures without acknowledging the delivery", async () => {
+    const logger = { warn: vi.fn() };
     const { fetchFn, requests } = createFetch({
-      events: [createCoreOutboxEvent("task.checkin_received", { task_id: "task-1" })],
+      events: [
+        createCoreOutboxEvent("task.checkin_received", {
+          task_id: "00000000-0000-4000-8000-000000000201",
+        }),
+      ],
     });
     const consumer = new YouPetOutboxConsumer({
       coreBaseUrl: "https://core.example.com",
       serviceToken: "svc-token",
+      tenantId: "00000000-0000-4000-8000-000000000101",
       fetchFn,
+      logger,
       handlers: {
         "task.checkin_received": () => {
           throw new Error("handler failed");
@@ -282,17 +399,26 @@ describe("YouPetOutboxConsumer", () => {
       "/internal/events/outbox/evt-task.checkin_received/nack",
     ]);
     expect(requests[1]?.body).toEqual({ error: "handler failed" });
+    expect(logger.warn).toHaveBeenCalledWith(
+      "[youpet] Nacking malformed or failed task.checkin_received delivery evt-task.checkin_received (domain event payload-evt-task.checkin_received): handler failed",
+    );
   });
 
   it("surfaces Core request failures to the caller", async () => {
-    const { fetchFn } = createFetch({
+    const logger = { warn: vi.fn() };
+    const { fetchFn, requests } = createFetch({
       events: [TASK_MISSED_CORE_OUTBOX_EVENT],
-      failPath: "/api/v1/tasks/task-1/escalate",
+      failPath: "/api/v1/action-requests",
+      failBody: {
+        detail: { code: "core_error", message: "authorization=secret-value" },
+      },
     });
     const consumer = new YouPetOutboxConsumer({
       coreBaseUrl: "https://core.example.com",
       serviceToken: "svc-token",
+      tenantId: "00000000-0000-4000-8000-000000000101",
       fetchFn,
+      logger,
     });
 
     const result = await consumer.pollOnce();
@@ -304,13 +430,16 @@ describe("YouPetOutboxConsumer", () => {
       nacked: 1,
       skipped: 0,
     });
+    expect(requests.at(-1)?.body).toEqual({
+      error: "YouPet Core ActionRequest request failed 500 /api/v1/action-requests",
+    });
+    expect(logger.warn).toHaveBeenCalledWith(expect.not.stringContaining("secret-value"));
   });
 
-  it("acknowledges terminal invalid task state conflicts from task escalation", async () => {
-    const logger = { warn: vi.fn() };
+  it("nacks when proposal persistence returns a downstream-shaped conflict", async () => {
     const { fetchFn, requests } = createFetch({
       events: [TASK_MISSED_CORE_OUTBOX_EVENT],
-      failPath: "/api/v1/tasks/task-1/escalate",
+      failPath: "/api/v1/action-requests",
       failStatus: 409,
       failBody: {
         detail: {
@@ -323,8 +452,8 @@ describe("YouPetOutboxConsumer", () => {
     const consumer = new YouPetOutboxConsumer({
       coreBaseUrl: "https://core.example.com",
       serviceToken: "svc-token",
+      tenantId: "00000000-0000-4000-8000-000000000101",
       fetchFn,
-      logger,
     });
 
     const result = await consumer.pollOnce();
@@ -332,34 +461,21 @@ describe("YouPetOutboxConsumer", () => {
     expect(result).toEqual({
       pulled: 1,
       processed: 1,
-      acknowledged: 1,
-      nacked: 0,
+      acknowledged: 0,
+      nacked: 1,
       skipped: 0,
     });
     expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
       "/internal/events/outbox",
-      "/api/v1/tasks/task-1/escalate",
-      "/internal/events/outbox/evt-task.missed/ack",
+      "/api/v1/action-requests",
+      "/internal/events/outbox/evt-task.missed/nack",
     ]);
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("terminal task.missed escalation conflict"),
-    );
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining('"event_id":"evt-task.missed"'),
-    );
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('"task_id":"task-1"'));
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining('"current_status":"completed"'),
-    );
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining('"allowed_statuses":["pending","reminded","missed"]'),
-    );
   });
 
-  it("nacks task escalation 409 responses with a different error code", async () => {
+  it("nacks ActionRequest creation 409 responses with a different error code", async () => {
     const { fetchFn, requests } = createFetch({
       events: [TASK_MISSED_CORE_OUTBOX_EVENT],
-      failPath: "/api/v1/tasks/task-1/escalate",
+      failPath: "/api/v1/action-requests",
       failStatus: 409,
       failBody: {
         detail: {
@@ -371,6 +487,7 @@ describe("YouPetOutboxConsumer", () => {
     const consumer = new YouPetOutboxConsumer({
       coreBaseUrl: "https://core.example.com",
       serviceToken: "svc-token",
+      tenantId: "00000000-0000-4000-8000-000000000101",
       fetchFn,
     });
 
@@ -385,21 +502,22 @@ describe("YouPetOutboxConsumer", () => {
     });
     expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
       "/internal/events/outbox",
-      "/api/v1/tasks/task-1/escalate",
+      "/api/v1/action-requests",
       "/internal/events/outbox/evt-task.missed/nack",
     ]);
   });
 
-  it("nacks task escalation 409 responses with a non-JSON body", async () => {
+  it("nacks ActionRequest creation 409 responses with a non-JSON body", async () => {
     const { fetchFn, requests } = createFetch({
       events: [TASK_MISSED_CORE_OUTBOX_EVENT],
-      failPath: "/api/v1/tasks/task-1/escalate",
+      failPath: "/api/v1/action-requests",
       failStatus: 409,
       failText: "conflict",
     });
     const consumer = new YouPetOutboxConsumer({
       coreBaseUrl: "https://core.example.com",
       serviceToken: "svc-token",
+      tenantId: "00000000-0000-4000-8000-000000000101",
       fetchFn,
     });
 
@@ -414,7 +532,7 @@ describe("YouPetOutboxConsumer", () => {
     });
     expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
       "/internal/events/outbox",
-      "/api/v1/tasks/task-1/escalate",
+      "/api/v1/action-requests",
       "/internal/events/outbox/evt-task.missed/nack",
     ]);
   });
@@ -422,11 +540,16 @@ describe("YouPetOutboxConsumer", () => {
   it("observably acknowledges unknown event types", async () => {
     const logger = { info: vi.fn() };
     const { fetchFn, requests } = createFetch({
-      events: [createCoreOutboxEvent("future.event_type", { task_id: "task-1" })],
+      events: [
+        createCoreOutboxEvent("future.event_type", {
+          task_id: "00000000-0000-4000-8000-000000000201",
+        }),
+      ],
     });
     const consumer = new YouPetOutboxConsumer({
       coreBaseUrl: "https://core.example.com",
       serviceToken: "svc-token",
+      tenantId: "00000000-0000-4000-8000-000000000101",
       fetchFn,
       logger,
     });
@@ -449,6 +572,91 @@ describe("YouPetOutboxConsumer", () => {
     );
   });
 
+  it("nacks unknown event types on every poll when ackUnhandledEvents is false", async () => {
+    const logger = { info: vi.fn() };
+    const { fetchFn, requests } = createFetch({
+      events: [
+        createCoreOutboxEvent("future.event_type", {
+          task_id: "00000000-0000-4000-8000-000000000201",
+        }),
+      ],
+    });
+    const consumer = new YouPetOutboxConsumer({
+      coreBaseUrl: "https://core.example.com",
+      serviceToken: "svc-token",
+      tenantId: "00000000-0000-4000-8000-000000000101",
+      fetchFn,
+      logger,
+      ackUnhandledEvents: false,
+    });
+
+    const first = await consumer.pollOnce();
+    const second = await consumer.pollOnce();
+
+    expect(first).toEqual({
+      pulled: 1,
+      processed: 1,
+      acknowledged: 0,
+      nacked: 1,
+      skipped: 0,
+    });
+    expect(second).toEqual({
+      pulled: 1,
+      processed: 1,
+      acknowledged: 0,
+      nacked: 1,
+      skipped: 0,
+    });
+    expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+      "/internal/events/outbox",
+      "/internal/events/outbox/evt-future.event_type/nack",
+      "/internal/events/outbox",
+      "/internal/events/outbox/evt-future.event_type/nack",
+    ]);
+    expect(requests[1]?.body).toEqual({
+      error: "unsupported_event_type: future.event_type",
+    });
+    expect(requests[3]?.body).toEqual(requests[1]?.body);
+    expect(logger.info).toHaveBeenCalledTimes(2);
+    expect(logger.info).toHaveBeenNthCalledWith(
+      1,
+      "[youpet] Nacking unsupported future.event_type delivery evt-future.event_type (domain event payload-evt-future.event_type)",
+    );
+    expect(logger.info).toHaveBeenNthCalledWith(
+      2,
+      "[youpet] Nacking unsupported future.event_type delivery evt-future.event_type (domain event payload-evt-future.event_type)",
+    );
+    expect(requests.some((request) => new URL(request.url).pathname.endsWith("/ack"))).toBe(false);
+  });
+
+  it("acknowledges handled events when ackUnhandledEvents is false", async () => {
+    const { fetchFn, requests } = createFetch({
+      events: [TASK_MISSED_CORE_OUTBOX_EVENT],
+    });
+    const consumer = new YouPetOutboxConsumer({
+      coreBaseUrl: "https://core.example.com",
+      serviceToken: "svc-token",
+      tenantId: "00000000-0000-4000-8000-000000000101",
+      fetchFn,
+      ackUnhandledEvents: false,
+    });
+
+    const result = await consumer.pollOnce();
+
+    expect(result).toEqual({
+      pulled: 1,
+      processed: 1,
+      acknowledged: 1,
+      nacked: 0,
+      skipped: 0,
+    });
+    expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+      "/internal/events/outbox",
+      "/api/v1/action-requests",
+      "/internal/events/outbox/evt-task.missed/ack",
+    ]);
+  });
+
   it("skips empty event_id deliveries before dispatch, ack, or nack", async () => {
     const logger = { error: vi.fn() };
     const { fetchFn, requests } = createFetch({
@@ -456,7 +664,7 @@ describe("YouPetOutboxConsumer", () => {
         createCoreOutboxEvent(
           "task.missed",
           {
-            task_id: "task-1",
+            task_id: "00000000-0000-4000-8000-000000000201",
             missed_count: 2,
             missed_threshold: 2,
           },
@@ -469,6 +677,7 @@ describe("YouPetOutboxConsumer", () => {
     const consumer = new YouPetOutboxConsumer({
       coreBaseUrl: "https://core.example.com",
       serviceToken: "svc-token",
+      tenantId: "00000000-0000-4000-8000-000000000101",
       fetchFn,
       logger,
     });
@@ -495,6 +704,71 @@ describe("YouPetOutboxConsumer", () => {
     );
   });
 
+  it("nacks supported deliveries missing payload.event_id before side effects", async () => {
+    const logger = { warn: vi.fn() };
+    const malformed = createCoreOutboxEvent(
+      "task.missed",
+      {
+        task_id: "00000000-0000-4000-8000-000000000201",
+        missed_count: 2,
+        missed_threshold: 2,
+      },
+      {
+        event_id: "evt-task.missed-missing-inner-id",
+        payload: {
+          aggregate: {
+            id: "00000000-0000-4000-8000-000000000201",
+            type: "task_instance",
+          },
+          correlation_id: "corr-1",
+          event_type: "task.missed",
+          event_version: 1,
+          idempotency_key: "idem-task.missed",
+          occurred_at: "2026-06-01T00:00:00Z",
+          payload: {
+            task_id: "00000000-0000-4000-8000-000000000201",
+            missed_count: 2,
+            missed_threshold: 2,
+          },
+          producer: "youpet-core",
+        },
+      },
+    );
+    const { fetchFn, requests } = createFetch({
+      events: [malformed],
+    });
+    const consumer = new YouPetOutboxConsumer({
+      coreBaseUrl: "https://core.example.com",
+      serviceToken: "svc-token",
+      tenantId: "00000000-0000-4000-8000-000000000101",
+      fetchFn,
+      logger,
+    });
+
+    const result = await consumer.pollOnce();
+
+    expect(result).toEqual({
+      pulled: 1,
+      processed: 1,
+      acknowledged: 0,
+      nacked: 1,
+      skipped: 0,
+    });
+    expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+      "/internal/events/outbox",
+      "/internal/events/outbox/evt-task.missed-missing-inner-id/nack",
+    ]);
+    expect(requests.some((request) => new URL(request.url).pathname.endsWith("/escalate"))).toBe(
+      false,
+    );
+    expect(requests.at(-1)?.body).toEqual({
+      error: "YouPet outbox item missing payload.event_id",
+    });
+    expect(logger.warn).toHaveBeenCalledWith(
+      "[youpet] Nacking malformed outbox item evt-task.missed-missing-inner-id: YouPet outbox item missing payload.event_id",
+    );
+  });
+
   it("builds settings from plugin config with env fallbacks", () => {
     const settings = createYouPetOutboxConsumerSettingsFromConfig({
       pluginConfig: {
@@ -505,6 +779,7 @@ describe("YouPetOutboxConsumer", () => {
       },
       env: {
         YOUPET_SERVICE_TOKEN: "env-token",
+        YOUPET_TENANT_ID: "00000000-0000-4000-8000-000000000101",
         YOUPET_OPENCLAW_POLL_INTERVAL_MS: "2500",
         YOUPET_OPENCLAW_MANAGE_FLOWS: "true",
       },
@@ -513,9 +788,12 @@ describe("YouPetOutboxConsumer", () => {
     expect(settings.enabled).toBe(true);
     expect(settings.coreBaseUrl).toBe("https://cfg.example.com");
     expect(settings.serviceToken).toBe("env-token");
+    expect(settings.tenantId).toBe("00000000-0000-4000-8000-000000000101");
     expect(settings.outboxLimit).toBe(10);
     expect(settings.pollIntervalMs).toBe(2500);
     expect(settings.manageFlows).toBe(false);
+    expect(isYouPetOutboxConsumerConfigured(settings)).toBe(true);
+    expect(isYouPetOutboxConsumerConfigured({ ...settings, tenantId: "shared" })).toBe(false);
   });
 
   it("wraps non-2xx Core responses", async () => {
@@ -523,6 +801,7 @@ describe("YouPetOutboxConsumer", () => {
     const consumer = new YouPetOutboxConsumer({
       coreBaseUrl: "https://core.example.com",
       serviceToken: "svc-token",
+      tenantId: "00000000-0000-4000-8000-000000000101",
       fetchFn,
     });
 

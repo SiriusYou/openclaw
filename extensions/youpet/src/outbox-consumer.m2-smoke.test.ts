@@ -1,4 +1,6 @@
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { promisify } from "node:util";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -9,8 +11,11 @@ import {
   createYouPetTestFlowStore,
   createYouPetTestRuntimeState,
 } from "../test/flow-store.fixture.js";
+import { YouPetOutboxConsumer } from "./outbox-consumer.js";
 
 const OWNER_ID = "00000000-0000-0000-0000-000000000001";
+const OPERATOR_ID = "00000000-0000-0000-0000-000000000002";
+const execFileAsync = promisify(execFile);
 
 type ConsumerAuthEntry = {
   token: string;
@@ -22,10 +27,23 @@ type ConsumerAuthMap = Record<string, ConsumerAuthEntry>;
 
 type SmokeConfig = {
   coreBaseUrl: string;
+  tenantId: string;
   consumerAuth: ConsumerAuthMap & {
     hermes: ConsumerAuthEntry;
     openclaw: ConsumerAuthEntry;
+    openhuman: ConsumerAuthEntry;
   };
+};
+
+type CoreActionRequestEnvelope = {
+  action_request: {
+    id: string;
+    target: { type: string; id: string };
+    action_type: string;
+    approval: { state: string };
+    execution: { state: string };
+  };
+  row_version: number;
 };
 
 type RecordedRequest = {
@@ -54,6 +72,8 @@ type CoreHealthPlanResponse = {
 };
 
 const smokeIt = process.env.YOUPET_M2_FLOW_SMOKE === "1" ? it : it.skip;
+const recoverySmokeIt =
+  process.env.YOUPET_M2_FLOW_SMOKE === "1" && process.env.YOUPET_DATABASE_URL ? it : it.skip;
 
 afterEach(async () => {
   vi.unstubAllGlobals();
@@ -68,6 +88,7 @@ describe("YouPet M2 OpenClaw flow live smoke", () => {
       readSmokeConfig({
         YOUPET_M2_FLOW_SMOKE: "1",
         YOUPET_CORE_BASE_URL: "http://127.0.0.1:18080",
+        YOUPET_TENANT_ID: "00000000-0000-4000-8000-000000000101",
       }),
     ).toThrow(/YOUPET_CONSUMER_AUTH/);
     expect(() =>
@@ -84,6 +105,33 @@ describe("YouPet M2 OpenClaw flow live smoke", () => {
             token: "openclaw-token",
             actor_id: "openclaw-youpet-consumer",
             outbox_lane: "openclaw",
+          },
+          openhuman: {
+            token: "openhuman-token",
+            actor_id: "openhuman-workbench",
+          },
+        }),
+      }),
+    ).toThrow(/YOUPET_TENANT_ID/);
+    expect(() =>
+      readSmokeConfig({
+        YOUPET_M2_FLOW_SMOKE: "1",
+        YOUPET_CORE_BASE_URL: "http://127.0.0.1:18080",
+        YOUPET_TENANT_ID: "00000000-0000-4000-8000-000000000101",
+        YOUPET_CONSUMER_AUTH: JSON.stringify({
+          hermes: {
+            token: "hermes-token",
+            actor_id: "hermes-wecom-bridge",
+            outbox_lane: "openclaw",
+          },
+          openclaw: {
+            token: "openclaw-token",
+            actor_id: "openclaw-youpet-consumer",
+            outbox_lane: "openclaw",
+          },
+          openhuman: {
+            token: "openhuman-token",
+            actor_id: "openhuman-workbench",
           },
         }),
       }),
@@ -129,7 +177,7 @@ describe("YouPet M2 OpenClaw flow live smoke", () => {
           start_at: new Date(Date.now() + 60_000).toISOString(),
           schedule_rule: "FREQ=DAILY;INTERVAL=1",
           reminder_times: ["09:00"],
-          missed_threshold: 2,
+          missed_threshold: 1,
         },
         idempotencyKey: `${runId}:plan`,
         fetchFn: originalFetch,
@@ -148,14 +196,14 @@ describe("YouPet M2 OpenClaw flow live smoke", () => {
       },
     );
 
-    const hermesPull = await pullHermesDeliveries(
+    const flowHermesPull = await pullHermesDeliveries(
       config,
       config.consumerAuth.hermes,
       plan.id,
       originalFetch,
     );
     await Promise.all(
-      hermesPull.claimedEventIds.map((eventId) =>
+      flowHermesPull.claimedEventIds.map((eventId) =>
         requestJson<unknown>(
           config,
           config.consumerAuth.hermes,
@@ -190,6 +238,7 @@ describe("YouPet M2 OpenClaw flow live smoke", () => {
           enabled: true,
           coreBaseUrl: config.coreBaseUrl,
           serviceToken: config.consumerAuth.openclaw.token,
+          tenantId: config.tenantId,
           actorId: config.consumerAuth.openclaw.actor_id,
           pollIntervalMs: 60_000,
         },
@@ -226,7 +275,7 @@ describe("YouPet M2 OpenClaw flow live smoke", () => {
       checkin_count: 0,
     });
     expect(activatedFlow?.flow_id).toBeTypeOf("string");
-    expect(openSyncKeyedStore).toHaveBeenCalledTimes(2);
+    expect(openSyncKeyedStore).toHaveBeenCalledTimes(3);
     expect(nackRequests(recordedRequests)).toHaveLength(0);
     expect(failedAckRequests(recordedRequests)).toHaveLength(0);
     expect(successfulAckRequests(recordedRequests)).toHaveLength(1);
@@ -255,7 +304,7 @@ describe("YouPet M2 OpenClaw flow live smoke", () => {
     await requestJson<unknown>(
       config,
       config.consumerAuth.hermes,
-      `/api/v1/tasks/${encodeURIComponent(hermesPull.taskId)}/checkin`,
+      `/api/v1/tasks/${encodeURIComponent(flowHermesPull.taskId)}/checkin`,
       {
         method: "POST",
         body: {
@@ -271,6 +320,7 @@ describe("YouPet M2 OpenClaw flow live smoke", () => {
     );
 
     const flowWritebacksBeforeCheckin = flowWritebackRequests(recordedRequests, plan.id).length;
+    const ackCountBeforeCheckin = successfulAckRequests(recordedRequests).length;
     try {
       service.start({
         logger: serviceLogProbe.logger,
@@ -280,7 +330,7 @@ describe("YouPet M2 OpenClaw flow live smoke", () => {
       await waitFor(
         () =>
           flowStore.lookupFlowByPlanId(plan.id)?.checkin_count === 1 &&
-          successfulAckRequests(recordedRequests).length === 2,
+          successfulAckRequests(recordedRequests).length > ackCountBeforeCheckin,
       );
     } finally {
       service.stop?.();
@@ -299,9 +349,404 @@ describe("YouPet M2 OpenClaw flow live smoke", () => {
     );
     expect(nackRequests(recordedRequests)).toHaveLength(0);
     expect(failedAckRequests(recordedRequests)).toHaveLength(0);
-    expect(successfulAckRequests(recordedRequests)).toHaveLength(2);
+    expect(successfulAckRequests(recordedRequests).length).toBeGreaterThan(ackCountBeforeCheckin);
+    expect(serviceLogProbe.problems).toEqual([]);
+
+    const taskPlan = await requestJson<CoreHealthPlanResponse>(
+      config,
+      config.consumerAuth.hermes,
+      "/api/v1/health-plans",
+      {
+        method: "POST",
+        body: {
+          pet_id: pet.id,
+          plan_type: "deworming",
+          title: `M2 smoke escalation ${runId.slice(0, 8)}`,
+          start_at: new Date(Date.now() + 120_000).toISOString(),
+          schedule_rule: "FREQ=DAILY;INTERVAL=1",
+          reminder_times: ["10:00"],
+          missed_threshold: 1,
+        },
+        idempotencyKey: `${runId}:task-plan`,
+        fetchFn: originalFetch,
+      },
+    );
+    await requestJson<CoreHealthPlanResponse>(
+      config,
+      config.consumerAuth.hermes,
+      `/api/v1/health-plans/${encodeURIComponent(taskPlan.id)}/activate`,
+      {
+        method: "POST",
+        idempotencyKey: `${runId}:activate-task-plan`,
+        correlationId: `m2-smoke-task-plan-${runId}`,
+        fetchFn: originalFetch,
+      },
+    );
+    const taskHermesPull = await pullHermesDeliveries(
+      config,
+      config.consumerAuth.hermes,
+      taskPlan.id,
+      originalFetch,
+    );
+    await Promise.all(
+      taskHermesPull.claimedEventIds.map((eventId) =>
+        requestJson<unknown>(
+          config,
+          config.consumerAuth.hermes,
+          `/internal/events/outbox/${encodeURIComponent(eventId)}/ack`,
+          {
+            method: "POST",
+            query: { consumer: "hermes" },
+            idempotencyKey: `${runId}:ack-task-plan:${eventId}`,
+            fetchFn: originalFetch,
+          },
+        ),
+      ),
+    );
+
+    const taskPlanProposalCount = actionRequestCreateRequests(recordedRequests).length;
+    const taskPlanAckCount = successfulAckRequests(recordedRequests).length;
+    try {
+      service.start({ logger: serviceLogProbe.logger, stateDir: "", config: {} });
+      await waitFor(
+        () =>
+          flowStore.lookupFlowByPlanId(taskPlan.id)?.core_linked === true &&
+          actionRequestCreateRequests(recordedRequests).length > taskPlanProposalCount &&
+          successfulAckRequests(recordedRequests).length > taskPlanAckCount,
+      );
+    } finally {
+      service.stop?.();
+    }
+
+    await requestJson<unknown>(
+      config,
+      config.consumerAuth.hermes,
+      `/api/v1/tasks/${encodeURIComponent(taskHermesPull.taskId)}/missed`,
+      {
+        method: "POST",
+        idempotencyKey: `${runId}:missed`,
+        correlationId: `m2-smoke-missed-${runId}`,
+        fetchFn: originalFetch,
+      },
+    );
+
+    const proposalCountBeforeMissed = actionRequestCreateRequests(recordedRequests).length;
+    const ackCountBeforeMissed = successfulAckRequests(recordedRequests).length;
+    try {
+      service.start({ logger: serviceLogProbe.logger, stateDir: "", config: {} });
+      await waitFor(
+        () =>
+          actionRequestCreateRequests(recordedRequests).length > proposalCountBeforeMissed &&
+          successfulAckRequests(recordedRequests).length > ackCountBeforeMissed,
+      );
+    } finally {
+      service.stop?.();
+    }
+
+    const pending = await requestJson<{ items: CoreActionRequestEnvelope[] }>(
+      config,
+      config.consumerAuth.openclaw,
+      "/api/v1/action-requests",
+      {
+        query: {
+          tenant_id: config.tenantId,
+          approval_state: "pending",
+          execution_state: "not_started",
+          limit: "200",
+        },
+        fetchFn: originalFetch,
+      },
+    );
+    const taskEscalation = pending.items.find(
+      (item) =>
+        item.action_request.action_type === "task.escalate" &&
+        item.action_request.target.type === "task_instance" &&
+        item.action_request.target.id === taskHermesPull.taskId,
+    );
+    if (!taskEscalation) {
+      throw new Error("expected pending task escalation ActionRequest");
+    }
+
+    await requestJson<CoreActionRequestEnvelope>(
+      config,
+      config.consumerAuth.openhuman,
+      `/api/v1/action-requests/${encodeURIComponent(taskEscalation.action_request.id)}/approve`,
+      {
+        method: "POST",
+        body: {
+          decided_by: { type: "user", id: OPERATOR_ID },
+          reason: "M2 live smoke approval",
+          expected_row_version: taskEscalation.row_version,
+        },
+        idempotencyKey: `${runId}:approve-task-escalation`,
+        fetchFn: originalFetch,
+      },
+    );
+
+    const escalationCountBeforeDispatch = taskEscalationRequests(
+      recordedRequests,
+      taskHermesPull.taskId,
+    ).length;
+    try {
+      service.start({ logger: serviceLogProbe.logger, stateDir: "", config: {} });
+      await waitFor(
+        () =>
+          taskEscalationRequests(recordedRequests, taskHermesPull.taskId).length >
+            escalationCountBeforeDispatch &&
+          successfulExecutionStatusRequests(
+            recordedRequests,
+            taskEscalation.action_request.id,
+            "succeeded",
+          ).length === 1,
+      );
+    } finally {
+      service.stop?.();
+    }
+
+    const executedTaskEscalation = await requestJson<CoreActionRequestEnvelope>(
+      config,
+      config.consumerAuth.openclaw,
+      `/api/v1/action-requests/${encodeURIComponent(taskEscalation.action_request.id)}`,
+      { fetchFn: originalFetch },
+    );
+    expect(executedTaskEscalation.action_request.execution.state).toBe("succeeded");
+    expect(taskEscalationRequests(recordedRequests, taskHermesPull.taskId)).toHaveLength(1);
+    expect(nackRequests(recordedRequests)).toHaveLength(0);
+    expect(failedAckRequests(recordedRequests)).toHaveLength(0);
     expect(serviceLogProbe.problems).toEqual([]);
   });
+
+  recoverySmokeIt(
+    "recovers a claimed live Core ActionRequest through the legacy both-null bridge",
+    async () => {
+      const config = readSmokeConfig(process.env);
+      if (!config) {
+        throw new Error("YOUPET_M2_FLOW_SMOKE=1 is required for this smoke");
+      }
+      const databaseUrl = readRequiredEnv(process.env, "YOUPET_DATABASE_URL");
+      const runId = randomUUID();
+      const workerId = `m2-recovery-${runId.slice(0, 8)}`;
+      const originalFetch = globalThis.fetch.bind(globalThis);
+
+      const pet = await requestJson<{ id: string }>(
+        config,
+        config.consumerAuth.hermes,
+        "/api/v1/pets",
+        {
+          method: "POST",
+          body: {
+            owner_user_id: OWNER_ID,
+            name: `M2 Recovery Cat ${runId.slice(0, 8)}`,
+            species: "cat",
+            breed: "American Shorthair",
+            weight_kg: 4.2,
+          },
+          idempotencyKey: `${runId}:pet`,
+          fetchFn: originalFetch,
+        },
+      );
+
+      const plan = await requestJson<CoreHealthPlanResponse>(
+        config,
+        config.consumerAuth.hermes,
+        "/api/v1/health-plans",
+        {
+          method: "POST",
+          body: {
+            pet_id: pet.id,
+            plan_type: "deworming",
+            title: `M2 recovery ${runId.slice(0, 8)}`,
+            start_at: new Date(Date.now() + 90_000).toISOString(),
+            schedule_rule: "FREQ=DAILY;INTERVAL=1",
+            reminder_times: ["11:00"],
+            missed_threshold: 1,
+          },
+          idempotencyKey: `${runId}:plan`,
+          fetchFn: originalFetch,
+        },
+      );
+
+      await requestJson<CoreHealthPlanResponse>(
+        config,
+        config.consumerAuth.hermes,
+        `/api/v1/health-plans/${encodeURIComponent(plan.id)}/activate`,
+        {
+          method: "POST",
+          idempotencyKey: `${runId}:activate`,
+          correlationId: `m2-recovery-${runId}`,
+          fetchFn: originalFetch,
+        },
+      );
+
+      const taskHermesPull = await pullHermesDeliveries(
+        config,
+        config.consumerAuth.hermes,
+        plan.id,
+        originalFetch,
+      );
+      await Promise.all(
+        taskHermesPull.claimedEventIds.map((eventId) =>
+          requestJson<unknown>(
+            config,
+            config.consumerAuth.hermes,
+            `/internal/events/outbox/${encodeURIComponent(eventId)}/ack`,
+            {
+              method: "POST",
+              query: { consumer: "hermes" },
+              idempotencyKey: `${runId}:ack-hermes:${eventId}`,
+              fetchFn: originalFetch,
+            },
+          ),
+        ),
+      );
+
+      const proposalConsumer = new YouPetOutboxConsumer({
+        coreBaseUrl: config.coreBaseUrl,
+        serviceToken: config.consumerAuth.openclaw.token,
+        tenantId: config.tenantId,
+        actorId: config.consumerAuth.openclaw.actor_id,
+        workerId,
+        fetchFn: originalFetch,
+        manageFlows: false,
+      });
+      await proposalConsumer.pollOnce();
+
+      await requestJson<unknown>(
+        config,
+        config.consumerAuth.hermes,
+        `/api/v1/tasks/${encodeURIComponent(taskHermesPull.taskId)}/missed`,
+        {
+          method: "POST",
+          idempotencyKey: `${runId}:missed`,
+          correlationId: `m2-recovery-missed-${runId}`,
+          fetchFn: originalFetch,
+        },
+      );
+      await proposalConsumer.pollOnce();
+
+      const pending = await requestJson<{ items: CoreActionRequestEnvelope[] }>(
+        config,
+        config.consumerAuth.openclaw,
+        "/api/v1/action-requests",
+        {
+          query: {
+            tenant_id: config.tenantId,
+            approval_state: "pending",
+            execution_state: "not_started",
+            limit: "200",
+          },
+          fetchFn: originalFetch,
+        },
+      );
+      const taskEscalation = pending.items.find(
+        (item) =>
+          item.action_request.action_type === "task.escalate" &&
+          item.action_request.target.type === "task_instance" &&
+          item.action_request.target.id === taskHermesPull.taskId,
+      );
+      if (!taskEscalation) {
+        throw new Error("expected pending task escalation ActionRequest for recovery smoke");
+      }
+
+      const approved = await requestJson<CoreActionRequestEnvelope>(
+        config,
+        config.consumerAuth.openhuman,
+        `/api/v1/action-requests/${encodeURIComponent(taskEscalation.action_request.id)}/approve`,
+        {
+          method: "POST",
+          body: {
+            decided_by: { type: "user", id: OPERATOR_ID },
+            reason: "M2 recovery live smoke approval",
+            expected_row_version: taskEscalation.row_version,
+          },
+          idempotencyKey: `${runId}:approve`,
+          fetchFn: originalFetch,
+        },
+      );
+      const queued = await requestJson<CoreActionRequestEnvelope>(
+        config,
+        config.consumerAuth.openclaw,
+        `/api/v1/action-requests/${encodeURIComponent(taskEscalation.action_request.id)}/execution-status`,
+        {
+          method: "POST",
+          body: {
+            state: "queued",
+            expected_row_version: approved.row_version,
+          },
+          idempotencyKey: `${runId}:queue`,
+          fetchFn: originalFetch,
+        },
+      );
+      await requestJson<CoreActionRequestEnvelope>(
+        config,
+        config.consumerAuth.openclaw,
+        `/api/v1/action-requests/${encodeURIComponent(taskEscalation.action_request.id)}/execution-claim`,
+        {
+          method: "POST",
+          body: {
+            worker_id: workerId,
+            expected_row_version: queued.row_version,
+          },
+          idempotencyKey: `${runId}:claim`,
+          fetchFn: originalFetch,
+        },
+      );
+
+      await forceActionRequestRecoveryBridge(databaseUrl, taskEscalation.action_request.id);
+
+      const recoveryRequests: RecordedRequest[] = [];
+      const recoveryConsumer = new YouPetOutboxConsumer({
+        coreBaseUrl: config.coreBaseUrl,
+        serviceToken: config.consumerAuth.openclaw.token,
+        tenantId: config.tenantId,
+        actorId: config.consumerAuth.openclaw.actor_id,
+        workerId: `dispatcher-${workerId}`,
+        fetchFn: createRecordingFetch(config.coreBaseUrl, originalFetch, recoveryRequests),
+        manageFlows: false,
+      });
+
+      const result = await recoveryConsumer.dispatchActionRequestsOnce();
+
+      expect(result).toMatchObject({
+        failed: 1,
+        claimed: 0,
+        succeeded: 0,
+        conflicted: 0,
+        errored: 0,
+      });
+      expect(taskEscalationRequests(recoveryRequests, taskHermesPull.taskId)).toHaveLength(0);
+      const failedExecution = successfulExecutionStatusRequests(
+        recoveryRequests,
+        taskEscalation.action_request.id,
+        "failed",
+      );
+      expect(failedExecution).toHaveLength(1);
+      expect(failedExecution[0]?.body).toMatchObject({
+        state: "failed",
+        error: {
+          code: "execution_authorization_expired",
+          message: "policy expired before execution completed",
+        },
+      });
+      expect(failedExecution[0]?.body).not.toHaveProperty("worker_id");
+
+      const recovered = await requestJson<CoreActionRequestEnvelope>(
+        config,
+        config.consumerAuth.openclaw,
+        `/api/v1/action-requests/${encodeURIComponent(taskEscalation.action_request.id)}`,
+        { fetchFn: originalFetch },
+      );
+      expect(recovered.action_request.execution.state).toBe("failed");
+      expect(recovered.row_version).toBe(5);
+      expect(recovered.execution_claim).toBeNull();
+      expect(
+        await countActionRequestRecoveryEvidence(databaseUrl, taskEscalation.action_request.id),
+      ).toEqual({ auditCount: 1, eventCount: 1 });
+      expect(
+        await countActionRequestConsumerDeliveries(databaseUrl, taskEscalation.action_request.id),
+      ).toBe(0);
+    },
+  );
 });
 
 function readSmokeConfig(env: Record<string, string | undefined>): SmokeConfig | null {
@@ -309,8 +754,14 @@ function readSmokeConfig(env: Record<string, string | undefined>): SmokeConfig |
     return null;
   }
   const coreBaseUrl = readRequiredEnv(env, "YOUPET_CORE_BASE_URL").replace(/\/+$/u, "");
+  const tenantId = readRequiredEnv(env, "YOUPET_TENANT_ID");
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(tenantId)
+  ) {
+    throw new Error("YOUPET_TENANT_ID must be a UUID");
+  }
   const consumerAuth = parseConsumerAuth(readRequiredEnv(env, "YOUPET_CONSUMER_AUTH"));
-  return { coreBaseUrl, consumerAuth };
+  return { coreBaseUrl, tenantId, consumerAuth };
 }
 
 function readRequiredEnv(env: Record<string, string | undefined>, name: string): string {
@@ -328,13 +779,14 @@ function parseConsumerAuth(raw: string): SmokeConfig["consumerAuth"] {
   }
   const hermes = readConsumerAuthEntry(parsed, "hermes", "hermes");
   const openclaw = readConsumerAuthEntry(parsed, "openclaw", "openclaw");
-  return { ...parsed, hermes, openclaw } as SmokeConfig["consumerAuth"];
+  const openhuman = readConsumerAuthEntry(parsed, "openhuman", null);
+  return { ...parsed, hermes, openclaw, openhuman } as SmokeConfig["consumerAuth"];
 }
 
 function readConsumerAuthEntry(
   auth: Record<string, unknown>,
   consumer: string,
-  expectedOutboxLane: string,
+  expectedOutboxLane: string | null,
 ): ConsumerAuthEntry {
   const entry = auth[consumer];
   if (!isRecord(entry)) {
@@ -346,13 +798,16 @@ function readConsumerAuthEntry(
     throw new Error(`YOUPET_CONSUMER_AUTH.${consumer} must include token and actor_id`);
   }
   const outboxLane = readString(entry.outbox_lane);
-  if (outboxLane !== expectedOutboxLane) {
+  if (
+    (expectedOutboxLane === null && outboxLane !== undefined) ||
+    (expectedOutboxLane !== null && outboxLane !== expectedOutboxLane)
+  ) {
     throw new Error(`YOUPET_CONSUMER_AUTH.${consumer}.outbox_lane must be ${expectedOutboxLane}`);
   }
   return {
     token,
     actor_id: actorId,
-    outbox_lane: outboxLane,
+    ...(outboxLane ? { outbox_lane: outboxLane } : {}),
   };
 }
 
@@ -399,6 +854,144 @@ async function requestJson<T>(
   return (text.length > 0 ? JSON.parse(text) : undefined) as T;
 }
 
+async function forceActionRequestRecoveryBridge(
+  databaseUrl: string,
+  actionRequestId: string,
+): Promise<string> {
+  const sql = `
+WITH boundary AS (
+  SELECT
+    id,
+    GREATEST(
+      COALESCE(
+        (document #>> '{policy,decided_at}')::timestamptz,
+        (document #>> '{action_request,policy,decided_at}')::timestamptz
+      ),
+      clock_timestamp()
+    ) AS expires_at
+  FROM action_requests
+  WHERE id = ${sqlStringLiteral(actionRequestId)}::uuid
+), updated AS (
+  UPDATE action_requests AS requests
+  SET
+    document = CASE
+      WHEN requests.document ? 'policy' THEN
+        jsonb_set(
+          requests.document,
+          '{policy,expires_at}',
+          to_jsonb(
+            to_char(
+              boundary.expires_at AT TIME ZONE 'UTC',
+              'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+            )
+          ),
+          true
+        )
+      WHEN requests.document ? 'action_request' THEN
+        jsonb_set(
+          requests.document,
+          '{action_request,policy,expires_at}',
+          to_jsonb(
+            to_char(
+              boundary.expires_at AT TIME ZONE 'UTC',
+              'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+            )
+          ),
+          true
+        )
+      ELSE requests.document
+    END,
+    execution_owner_id = NULL,
+    execution_lease_expires_at = NULL,
+    updated_at = boundary.expires_at
+  FROM boundary
+  WHERE requests.id = boundary.id
+  RETURNING requests.id, requests.document
+)
+SELECT CASE
+  WHEN document ? 'policy' THEN document #>> '{policy,expires_at}'
+  ELSE document #>> '{action_request,policy,expires_at}'
+END
+FROM updated;
+`.trim();
+  const { stdout, stderr } = await execFileAsync(
+    "psql",
+    [databaseUrl, "-X", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-c", sql],
+    {
+      env: { ...process.env, PAGER: "cat" },
+      maxBuffer: 1024 * 1024,
+    },
+  );
+  const expiresAt = stdout.trim();
+  if (!expiresAt) {
+    throw new Error(
+      `expected psql to expire ActionRequest ${actionRequestId}; stdout=${stdout} stderr=${stderr}`,
+    );
+  }
+  return expiresAt;
+}
+
+async function countActionRequestConsumerDeliveries(
+  databaseUrl: string,
+  actionRequestId: string,
+): Promise<number> {
+  const sql = `
+SELECT COUNT(*)
+FROM outbox_deliveries deliveries
+JOIN event_outbox events ON events.id = deliveries.event_id
+WHERE events.aggregate_type = 'action_request'
+  AND events.aggregate_id = ${sqlStringLiteral(actionRequestId)}::uuid
+  AND deliveries.consumer IN ('openclaw', 'openhuman');
+`.trim();
+  const { stdout } = await execFileAsync(
+    "psql",
+    [databaseUrl, "-X", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-c", sql],
+    {
+      env: { ...process.env, PAGER: "cat" },
+      maxBuffer: 1024 * 1024,
+    },
+  );
+  return Number(stdout.trim());
+}
+
+async function countActionRequestRecoveryEvidence(
+  databaseUrl: string,
+  actionRequestId: string,
+): Promise<{ auditCount: number; eventCount: number }> {
+  const sql = `
+SELECT
+  (
+    SELECT COUNT(*)
+    FROM audit_logs
+    WHERE target_type = 'action_request'
+      AND target_id = ${sqlStringLiteral(actionRequestId)}::uuid
+      AND action = 'action_request.execution_updated'
+      AND payload_json->>'execution_state' = 'failed'
+  ),
+  (
+    SELECT COUNT(*)
+    FROM event_outbox
+    WHERE aggregate_type = 'action_request'
+      AND aggregate_id = ${sqlStringLiteral(actionRequestId)}::uuid
+      AND event_type = 'action_request.execution_updated'
+      AND payload #>> '{payload,execution_state}' = 'failed'
+  );
+`.trim();
+  const { stdout } = await execFileAsync(
+    "psql",
+    [databaseUrl, "-X", "-A", "-t", "-F", "|", "-v", "ON_ERROR_STOP=1", "-c", sql],
+    {
+      env: { ...process.env, PAGER: "cat" },
+      maxBuffer: 1024 * 1024,
+    },
+  );
+  const [auditCount, eventCount] = stdout
+    .trim()
+    .split("|")
+    .map((value) => Number(value));
+  return { auditCount, eventCount };
+}
+
 async function pullHermesDeliveries(
   config: SmokeConfig,
   auth: ConsumerAuthEntry,
@@ -415,7 +1008,7 @@ async function pullHermesDeliveries(
     return (
       item.event_type === "task.created" &&
       readString(payload?.plan_id) === planId &&
-      !!readString(payload?.task_id)
+      Boolean(readString(payload?.task_id))
     );
   });
   if (!taskCreated) {
@@ -463,7 +1056,9 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<voi
     if (predicate()) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 25);
+    });
   }
   throw new Error("timed out waiting for M2 smoke condition");
 }
@@ -473,6 +1068,40 @@ function flowWritebackRequests(requests: RecordedRequest[], planId: string): Rec
     (request) =>
       new URL(request.url).pathname === `/api/v1/health-plans/${planId}/flow` &&
       request.method === "POST",
+  );
+}
+
+function actionRequestCreateRequests(requests: RecordedRequest[]): RecordedRequest[] {
+  return requests.filter(
+    (request) =>
+      new URL(request.url).pathname === "/api/v1/action-requests" &&
+      request.method === "POST" &&
+      request.ok === true,
+  );
+}
+
+function taskEscalationRequests(requests: RecordedRequest[], taskId: string): RecordedRequest[] {
+  return requests.filter(
+    (request) =>
+      new URL(request.url).pathname === `/api/v1/tasks/${taskId}/escalate` &&
+      request.method === "POST" &&
+      request.ok === true,
+  );
+}
+
+function successfulExecutionStatusRequests(
+  requests: RecordedRequest[],
+  actionRequestId: string,
+  state: string,
+): RecordedRequest[] {
+  return requests.filter(
+    (request) =>
+      new URL(request.url).pathname ===
+        `/api/v1/action-requests/${actionRequestId}/execution-status` &&
+      request.method === "POST" &&
+      request.ok === true &&
+      isRecord(request.body) &&
+      request.body.state === state,
   );
 }
 
@@ -545,4 +1174,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function sqlStringLiteral(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
 }
